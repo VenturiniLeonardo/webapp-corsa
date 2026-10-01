@@ -7,6 +7,7 @@ import 'maplibre-gl/dist/maplibre-gl.css'
 import { type ReactNode, type RefObject, useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { Link, useParams } from 'react-router-dom'
 import { api } from '../api/client'
+import AiPanel from '../components/AiPanel'
 import { formatDate, formatDistance, formatDuration, formatPace } from '../utils/formatters'
 
 // --- API shapes (app/api/activities.py) -------------------------------------
@@ -273,6 +274,8 @@ export default function ActivityDetailPage() {
 
       {/* 5. zones */}
       {d.metrics?.time_in_zones_s && <Zones secs={d.metrics.time_in_zones_s} />}
+
+      <AiPanel path={`/api/ai/activity/${id}`} />
 
       {/* 6. best efforts */}
       {d.best_efforts.length > 0 && (

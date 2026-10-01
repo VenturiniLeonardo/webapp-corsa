@@ -4,6 +4,7 @@ import type { EChartsOption } from 'echarts'
 import { type ReactNode, useEffect, useRef, useState } from 'react'
 import { Link, useSearchParams } from 'react-router-dom'
 import { api } from '../api/client'
+import AiPanel from '../components/AiPanel'
 import { formatDuration, formatPace } from '../utils/formatters'
 import { iso, PRESETS, presetFrom } from '../utils/period'
 
@@ -131,6 +132,7 @@ export default function DashboardPage() {
 
       <SummaryStrip data={summary.data} showDelta={!!from} busy={summary.isFetching} />
       {(volume.isError || summary.isError) && <p className="text-sm text-red-400">Failed to load stats.</p>}
+      <AiPanel path="/api/ai/period" body={{ from_date: from, to_date: to }} />
 
       <div className="grid gap-x-8 gap-y-6 xl:grid-cols-2">
         <VolumeChart data={volume.data} />

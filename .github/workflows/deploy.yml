@@ -1,0 +1,25 @@
+name: Release
+
+# Tag vX.Y.Z -> full CI gate -> GitHub Release. The VM deploy stays manual
+# (private Tailscale host): `git fetch --tags && git checkout vX.Y.Z && ./scripts/deploy.sh`.
+on:
+  push:
+    tags: ["v*"]
+
+permissions:
+  contents: read
+
+jobs:
+  ci:
+    uses: ./.github/workflows/ci.yml
+
+  release:
+    needs: ci
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+      - run: gh release create "$GITHUB_REF_NAME" --generate-notes --verify-tag
+        env:
+          GH_TOKEN: ${{ github.token }}

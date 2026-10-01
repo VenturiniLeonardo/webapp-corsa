@@ -155,10 +155,13 @@ def _trend(t: stats.Trends, unit: str) -> dict[str, Any]:
     out: dict[str, Any] = {"steady_runs_n": t.n}
     if t.trend and t.points:
         first, last = t.points[0].rolling_median, t.points[-1].rolling_median
+        per4w = t.trend.slope_per_day * 28
+        fmt = _pace if unit == "s_per_km" else (lambda v: _r(v, 3))
         out["trend"] = {
-            "rolling_28d_median_start": first,
-            "rolling_28d_median_end": last,
-            f"theil_sen_change_per_4_weeks_{unit}": _r(t.trend.slope_per_day * 28, 3),
+            "rolling_28d_median_start": fmt(first),
+            "rolling_28d_median_end": fmt(last),
+            f"theil_sen_change_per_4_weeks_{unit}": _r(per4w, 1 if unit == "s_per_km" else 4),
+            "theil_sen_change_per_4_weeks_pct": _r(100 * per4w / first) if first else None,
             "span_days": t.trend.span_days,
         }
     return out
