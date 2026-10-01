@@ -40,11 +40,11 @@ curl -f http://127.0.0.1:8000/healthz
 Backup env (`/etc/corsa/backup.env`, root:root, chmod 600):
 
 ```
-RESTIC_REPOSITORY=s3:https://<account_id>.eu.r2.cloudflarestorage.com/<bucket>   # drop ".eu" if the bucket has no EU jurisdiction
+RESTIC_REPOSITORY=s3:https://s3.<region>.backblazeb2.com/<bucket>   # region from the bucket endpoint, e.g. eu-central-003
 RESTIC_PASSWORD=...            # password manager
-AWS_ACCESS_KEY_ID=...          # Cloudflare R2 API token (Object Read & Write, scoped to the bucket)
-AWS_SECRET_ACCESS_KEY=...
-AWS_DEFAULT_REGION=auto
+AWS_ACCESS_KEY_ID=...          # Backblaze B2 application key ID (read+write, scoped to the bucket)
+AWS_SECRET_ACCESS_KEY=...      # B2 applicationKey (shown once)
+AWS_DEFAULT_REGION=<region>    # same as in the endpoint
 HC_BACKUP_URL=https://hc-ping.com/<uuid>
 ```
 
@@ -75,6 +75,29 @@ sudo systemctl daemon-reload && sudo systemctl enable --now corsa-backup.timer
 systemctl list-timers corsa-backup.timer
 ```
 
+Litestream (continuous DB replica to the same B2 bucket, prefix `litestream/`, ~1 min lag; restic stays for uploads and as second layer): install the arm64 `.deb` from the Litestream releases page, put this in `/etc/litestream.yml` (root, 600), and add a drop-in `/etc/systemd/system/litestream.service.d/env.conf` with `[Service]` / `EnvironmentFile=/etc/corsa/backup.env`:
+
+```yaml
+dbs:
+  - path: /opt/corsa/data/corsa.db
+    replica:
+      type: s3
+      bucket: corsa-db
+      path: litestream
+      endpoint: https://s3.<region>.backblazeb2.com
+      region: <region>
+      access-key-id: ${AWS_ACCESS_KEY_ID}
+      secret-access-key: ${AWS_SECRET_ACCESS_KEY}
+      sync-interval: 60s
+snapshot: {interval: 24h, retention: 72h}
+```
+
+```bash
+sudo systemctl daemon-reload && sudo systemctl enable --now litestream && journalctl -u litestream -n 10
+```
+
+Before manually replacing `corsa.db` (rollback below): `sudo systemctl stop litestream`, then start it again afterwards.
+
 Docker starts on boot and containers use `restart: unless-stopped`, so no app unit is needed. Healthchecks.io: create checks `backup` (period 24 h, grace 2 h)
 
 ## 2. Deploy / rollback
@@ -90,9 +113,9 @@ New VM (Oracle reclaimed it, account issue, corruption):
 
 1. Section 1: setup up to (not including) `deploy.sh`; `.env` and `backup.env` from password manager.
 2. `git clone` into `/opt/corsa`.
-3. `sudo ./scripts/restore.sh` (restores latest snapshot, integrity-checks, prints activity count).
+3. `sudo LITESTREAM_CONFIG=/etc/litestream.yml ./scripts/restore.sh` (needs `litestream` installed and `/etc/litestream.yml` in place; restores the Litestream replica, else the latest restic snapshot; integrity-checks, prints activity count). Without `LITESTREAM_CONFIG` it uses restic only.
 4. `./scripts/deploy.sh` then verify `/healthz` and the activity count in the UI.
-5. Re-enable the backup timer.
+5. Re-enable the backup timer and `litestream` (the replica generation continues from the restored DB).
 
 Target RTO < 2 h.
 
@@ -113,7 +136,7 @@ Pass = integrity ok, count within last-night delta, latest date matches. Also ru
 
 | Secret | Steps |
 |--------|-------|
-| R2 API token | Cloudflare dashboard → R2 → Manage API tokens → create new token → update `/etc/corsa/backup.env` → `sudo ./scripts/backup.sh` succeeds → delete old key. |
+| B2 application key | Backblaze → Application Keys → add new key (scoped to the bucket) → update `/etc/corsa/backup.env` → `sudo ./scripts/backup.sh` succeeds → delete old key. |
 | restic password | `restic key add` (new) → update `backup.env` → `restic key remove <old-id>` → store in password manager. Verify `restic snapshots`. |
 | healthchecks URL | Regenerate ping key/UUID → update `backup.env`. |
 | OpenRouter API key | openrouter.ai → Keys → create new → `OPENROUTER_API_KEY` in `.env` → `docker compose up -d` → delete old key. Empty value disables AI. |

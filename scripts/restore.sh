@@ -10,6 +10,11 @@ restic restore latest --tag corsa --target "$TMP"
 # snapshot paths are stored as /<tmpdir>/backup.db -> locate it
 db=$(find "$TMP" -name backup.db -print -quit)
 [ -n "$db" ] || { echo "backup.db not found in snapshot" >&2; exit 1; }
+# Prefer the Litestream replica (seconds-fresh) over the nightly restic snapshot when available.
+# Set LITESTREAM_CONFIG=/path to use it; falls back to restic on failure.
+if [ -n "${LITESTREAM_CONFIG:-}" ] && litestream restore -config "$LITESTREAM_CONFIG" -o "$TMP/ls.db" "$DATA_DIR/corsa.db"; then
+  db="$TMP/ls.db"; echo "using Litestream replica"
+fi
 sqlite3 "$db" "PRAGMA integrity_check;" | grep -qx ok || { echo "integrity_check failed" >&2; exit 1; }
 
 mkdir -p "$DATA_DIR"
