@@ -90,3 +90,14 @@ def test_jobs_list_and_detail(client, engine):
     assert d["job"]["kind"] == "recompute"
     assert d["failed_records"] == [{"id": 1, "external_id": "1", "error": "boom"}]
     assert client.get("/api/jobs/999").status_code == 404
+
+
+def test_cycle_and_races_roundtrip_and_clear(client):
+    r = client.put(
+        "/api/settings", json={"cycle_start": "2026-09-07", "races": ["2026-11-15"]}, headers=H
+    )
+    assert r.json()["settings"]["cycle_start"] == "2026-09-07"
+    assert r.json()["settings"]["races"] == ["2026-11-15"]
+    assert client.put("/api/settings", json={"cycle_start": "nope"}, headers=H).status_code == 422
+    r = client.put("/api/settings", json={"cycle_start": None, "hr_zones": None}, headers=H)
+    assert r.json()["settings"]["cycle_start"] is None

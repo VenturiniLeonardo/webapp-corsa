@@ -10,6 +10,8 @@ type Settings = {
   steady_cv_threshold: number | null
   ref_pace_s_per_km: number | null
   weather_enabled: boolean | null
+  cycle_start: string | null
+  races: string[] | null
 }
 
 const field = 'rounded-lg border border-[#262b33] bg-[#111418] px-2.5 py-1 text-sm font-mono tabular-nums text-[#eef1f4]'
@@ -29,6 +31,8 @@ export default function SettingsPage() {
   const [cv, setCv] = useState(0.08)
   const [refPace, setRefPace] = useState('7:00')
   const [weather, setWeather] = useState(false)
+  const [cycleStart, setCycleStart] = useState('')
+  const [races, setRaces] = useState<string[]>([])
   const [toast, setToast] = useState('')
 
   useEffect(() => {
@@ -40,6 +44,8 @@ export default function SettingsPage() {
     setCv(d.steady_cv_threshold ?? 0.08)
     setRefPace(mmss(d.ref_pace_s_per_km ?? 420))
     setWeather(!!d.weather_enabled)
+    setCycleStart(d.cycle_start ?? '')
+    setRaces(d.races ?? [])
   }, [q.data])
 
   const z = zones.map(n)
@@ -61,7 +67,7 @@ export default function SettingsPage() {
     mutationFn: () =>
       api<{ recompute_job_id: number | null }>('/api/settings', {
         method: 'PUT',
-        body: JSON.stringify({ hr_max: max, hr_rest: rest, hr_zones: filled ? z : null, steady_cv_threshold: cv, ref_pace_s_per_km: ref, weather_enabled: weather }),
+        body: JSON.stringify({ hr_max: max, hr_rest: rest, hr_zones: filled ? z : null, steady_cv_threshold: cv, ref_pace_s_per_km: ref, weather_enabled: weather, cycle_start: cycleStart || null, races: [...new Set(races.filter(Boolean))].sort() }),
       }),
     onSuccess: (r) => {
       setToast(r.recompute_job_id ? 'Saved — recomputation queued' : 'Saved')
@@ -151,6 +157,28 @@ export default function SettingsPage() {
             <span className="block text-xs text-neutral-500">Sends each run&apos;s start position rounded to ~1 km and its date to open-meteo.com. Used for the heat-corrected EF.</span>
           </span>
         </label>
+      </Panel>
+
+      <Panel title="Ciclo e gare" className="space-y-3 text-sm">
+        <label className="block space-y-1">
+          <span className="block text-neutral-400">Inizio di una 1ª settimana di carico (ciclo 3 carico + 1 scarico)</span>
+          <input type="date" className={field} value={cycleStart} onChange={(e) => setCycleStart(e.target.value)} />
+        </label>
+        <div className="space-y-1">
+          <span className="block text-neutral-400">Gare</span>
+          {races.map((r, i) => (
+            <div key={i} className="flex items-center gap-2">
+              <input type="date" className={field} value={r} onChange={(e) => setRaces(races.map((o, j) => (j === i ? e.target.value : o)))} />
+              <button type="button" aria-label="Rimuovi gara" className="px-2 text-neutral-400 hover:text-red-400" onClick={() => setRaces(races.filter((_, j) => j !== i))}>
+                ×
+              </button>
+            </div>
+          ))}
+          <button type="button" className="text-xs text-[#4c8dff]" onClick={() => setRaces([...races, ''])}>
+            + Aggiungi gara
+          </button>
+        </div>
+        <p className="text-xs text-neutral-500">Gli avvisi di carico tengono conto della fase: niente allarme &quot;carico in calo&quot; in scarico e nei 7 giorni prima e dopo una gara. Se il ciclo slitta, aggiorna la data di inizio.</p>
       </Panel>
 
       <div className="flex items-center gap-3">

@@ -1,3 +1,4 @@
+from datetime import date
 from itertools import pairwise
 from typing import Any, cast
 
@@ -17,7 +18,10 @@ KEYS = (
     "steady_cv_threshold",
     "ref_pace_s_per_km",
     "weather_enabled",
+    "cycle_start",
+    "races",
 )
+CLEARABLE = {"cycle_start"}  # null clears it; other keys ignore null
 RECOMPUTE_KEYS = {"hr_zones", "steady_cv_threshold", "ref_pace_s_per_km"}  # metrics cfg inputs
 
 
@@ -29,6 +33,8 @@ class SettingsIn(BaseModel):
     steady_cv_threshold: float | None = Field(None, gt=0, le=1)
     ref_pace_s_per_km: int | None = Field(None, ge=150, le=600)  # HR-at-reference-pace target
     weather_enabled: bool | None = None  # opt-in: sends rounded coords + date to Open-Meteo
+    cycle_start: date | None = None  # first day of a load week 1 in the 3+1 cycle
+    races: list[date] | None = Field(None, max_length=100)
 
     @field_validator("hr_zones")
     @classmethod
@@ -53,10 +59,11 @@ def read_settings(db: Db) -> dict[str, Any]:
 @router.put("/settings")
 def put_settings(body: SettingsIn, db: Db) -> dict[str, Any]:
     old, changed = _read(db), set()
-    for k, v in body.model_dump(exclude_unset=True, exclude_none=True).items():
-        if old[k] != v:
-            changed.add(k)
-            db.merge(Setting(key=k, value=v))
+    for k, v in body.model_dump(exclude_unset=True, mode="json").items():
+        if (v is None and k not in CLEARABLE) or old[k] == v:
+            continue
+        changed.add(k)
+        db.merge(Setting(key=k, value=v))
     db.commit()
     job_id, q = None, JobQueue(cast(Engine, db.get_bind()))
     if changed & RECOMPUTE_KEYS:

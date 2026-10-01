@@ -13,7 +13,7 @@ from app.api import stats
 from app.api.stats import theil_sen
 from app.core.config import get_settings
 from app.core.db import get_session, make_engine
-from app.domain.models import Activity, ActivityMetrics, Base, BestEffort
+from app.domain.models import Activity, ActivityMetrics, Base, BestEffort, Setting
 from app.main import app
 
 TODAY = date(2026, 9, 30)  # a Wednesday
@@ -507,3 +507,30 @@ def test_trends_gap_ef_adj_and_hr_ref(engine, client):
     assert get(client, "/api/stats/trends", metric="ef_adj")["points"][0]["value"] == 1.7
     hr = get(client, "/api/stats/trends", metric="hr_ref")
     assert hr["n"] == 1 and hr["points"][0]["value"] == 148.0
+
+
+def test_phase():
+    t, ph = date(2026, 10, 1), stats._phase
+    assert ph(t, None, None) is None and ph(t, "2026-10-02", None) is None
+    assert [ph(t, str(t - timedelta(days=7 * w)), None) for w in range(5)] == [
+        "load1",
+        "load2",
+        "load3",
+        "deload",
+        "load1",
+    ]
+    assert ph(t, str(t), ["2026-10-08"]) == "race_week"
+    assert ph(t, str(t), ["2026-09-30"]) == "post_race"
+    assert ph(t, str(t), ["2026-10-09", "2026-09-23"]) == "load1"  # both just out of range
+
+
+def test_fitness_alerts_respect_phase(engine, client):
+    with Session(engine) as s, s.begin():
+        for i in range(21):  # 3 load weeks, then nothing: ACWR ~0
+            a = add(s, f"{TODAY - timedelta(days=27 - i)}T06:00:00+00:00", 10000, 3000)
+            metrics(s, a, time_in_zones_s=[3000, 0, 0, 0, 0])
+    assert "acwr_low" in {a["code"] for a in get(client, "/api/stats/fitness")["alerts"]}
+    with Session(engine) as s, s.begin():
+        s.add(Setting(key="cycle_start", value=str(TODAY - timedelta(days=27))))
+    f = get(client, "/api/stats/fitness")
+    assert f["phase"] == "deload" and "acwr_low" not in {a["code"] for a in f["alerts"]}

@@ -553,6 +553,9 @@ class Prediction(BaseModel):
     seconds: int
 
 
+Phase = Literal["load1", "load2", "load3", "deload", "race_week", "post_race"]
+
+
 class Alert(BaseModel):
     level: Literal["info", "warn", "high"]
     code: Literal["ramp", "acwr_high", "acwr_low", "monotony"]
@@ -570,6 +573,22 @@ class Fitness(BaseModel):
     strain: float | None  # weekly load * monotony
     ramp_pct: float | None  # km last 7 d vs weekly mean of the 3 weeks before, %
     alerts: list[Alert]
+    phase: Phase | None  # from the cycle_start / races settings
+
+
+RACE_BEFORE, RACE_AFTER = 7, 7  # days around a race that override the cycle week
+
+
+def _phase(today: date, cycle_start: str | None, races: list[str] | None) -> Phase | None:
+    for r in map(date.fromisoformat, races or []):
+        if 0 <= (r - today).days <= RACE_BEFORE:
+            return "race_week"
+        if 0 < (today - r).days <= RACE_AFTER:
+            return "post_race"
+    if not cycle_start or (d := (today - date.fromisoformat(cycle_start)).days) < 0:
+        return None
+    # ponytail: fixed 3 load + 1 deload; races don't shift the cycle, move cycle_start if they do
+    return ("load1", "load2", "load3", "deload")[d // 7 % 4]
 
 
 VDOT_WINDOW_DAYS = 180
@@ -595,9 +614,11 @@ def _ramp_pct(daily_km: dict[date, float], today: date) -> float | None:
     return (last / base - 1) * 100 if base >= RAMP_MIN_BASE_KM else None
 
 
-def _alerts(ix: dict[str, float | None], ramp: float | None) -> list[Alert]:
+def _alerts(ix: dict[str, float | None], ramp: float | None, phase: Phase | None) -> list[Alert]:
     out: list[Alert] = []
-    if ramp is not None and ramp > RAMP_WARN:
+    # after a deload/race the 3-week baseline is depressed, so only flag the big jumps
+    ramp_warn = RAMP_HIGH if phase in ("load1", "post_race") else RAMP_WARN
+    if ramp is not None and ramp > ramp_warn:
         out.append(
             Alert(
                 level="high" if ramp > RAMP_HIGH else "warn",
@@ -607,7 +628,7 @@ def _alerts(ix: dict[str, float | None], ramp: float | None) -> list[Alert]:
             )
         )
     if (a := ix["acwr"]) is not None:
-        if a > ACWR_WARN:
+        if a > (ACWR_HIGH if phase in ("load2", "load3") else ACWR_WARN):  # planned build
             out.append(
                 Alert(
                     level="high" if a > ACWR_HIGH else "warn",
@@ -616,12 +637,13 @@ def _alerts(ix: dict[str, float | None], ramp: float | None) -> list[Alert]:
                     "(zona ottimale 0,8–1,3).",
                 )
             )
-        elif a < ACWR_LOW:
+        elif a < ACWR_LOW and phase not in ("deload", "race_week", "post_race"):
             out.append(
                 Alert(
                     level="info",
                     code="acwr_low",
-                    message=f"ACWR {a:.2f}: carico in calo, la forma cronica si sta riducendo.",
+                    message=f"ACWR {a:.2f}: carico in calo. Normale in settimana di scarico "
+                    "o di gara; se dura più di una settimana la forma cronica si riduce.",
                 )
             )
     if (m := ix["monotony"]) is not None and m > MONOTONY_WARN:
@@ -684,7 +706,9 @@ def fitness(s: Db, sc: Sc) -> Fitness:
 
     hr: dict[str, Any] = dict(
         s.execute(
-            select(Setting.key, Setting.value).where(Setting.key.in_(("hr_max", "hr_rest")))
+            select(Setting.key, Setting.value).where(
+                Setting.key.in_(("hr_max", "hr_rest", "cycle_start", "races"))
+            )
         ).all()
     )
     est: list[float] = []
@@ -728,6 +752,7 @@ def fitness(s: Db, sc: Sc) -> Fitness:
             for d2, lb in PRED_TARGETS.items()
         ]
     ix, ramp = _load_indices(daily, today), _ramp_pct(daily_km, today)
+    phase = _phase(today, hr.get("cycle_start"), hr.get("races"))
     return Fitness(
         vo2max=Vo2(
             vdot=best[0] if best else None,
@@ -739,7 +764,8 @@ def fitness(s: Db, sc: Sc) -> Fitness:
         predictions=preds,
         **ix,
         ramp_pct=ramp,
-        alerts=_alerts(ix, ramp),
+        alerts=_alerts(ix, ramp, phase),
+        phase=phase,
     )
 
 

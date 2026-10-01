@@ -46,6 +46,7 @@ type Fitness = {
   strain: number | null
   ramp_pct: number | null
   alerts: { level: 'info' | 'warn' | 'high'; code: string; message: string }[]
+  phase: 'load1' | 'load2' | 'load3' | 'deload' | 'race_week' | 'post_race' | null
 }
 type CadenceBands = {
   n: number
@@ -600,18 +601,29 @@ function Alerts({ data }: { data?: Fitness }) {
 }
 
 // --- fitness indices -------------------------------------------------------------
+const PHASE: Record<NonNullable<Fitness['phase']>, string> = {
+  load1: 'carico 1/3',
+  load2: 'carico 2/3',
+  load3: 'carico 3/3',
+  deload: 'scarico',
+  race_week: 'settimana gara',
+  post_race: 'post gara',
+}
 function FitnessIndices({ data }: { data?: Fitness }) {
   if (!data) return <div className="h-[200px] animate-pulse rounded-[14px]" style={{ background: SURF }} />
   const { vo2max: v, predictions: pr } = data
   const f = (x: number | null, dg = 0) => (x == null ? '—' : it(x, dg))
-  const acwrNote = data.acwr == null ? '' : data.acwr > 1.5 ? 'carico a rischio' : data.acwr > 1.3 ? 'in aumento' : data.acwr >= 0.8 ? 'zona ottimale' : 'in calo'
-  const tsbNote = data.tsb == null ? '' : data.tsb > 5 ? 'fresco' : data.tsb >= -10 ? 'neutro' : data.tsb >= -30 ? 'in carico' : 'molto affaticato'
+  const easing = data.phase === 'deload' || data.phase === 'race_week' || data.phase === 'post_race'
+  const building = data.phase === 'load2' || data.phase === 'load3'
+  const acwrNote = data.acwr == null ? '' : data.acwr > 1.5 ? 'picco · rischio' : data.acwr > 1.3 ? (building ? 'sopra la media · atteso' : 'sopra la media') : data.acwr >= 0.8 ? 'zona ottimale' : easing ? 'in calo · atteso' : 'in calo'
+  const tsbNote = data.tsb == null ? '' : data.tsb > 5 ? 'carico in calo · riposato' : data.tsb >= -10 ? 'in equilibrio' : data.tsb >= -30 ? 'blocco di carico' : 'carico molto sopra la media'
+  const phase = data.phase && PHASE[data.phase]
   const monoNote = data.monotony == null ? '' : data.monotony > 2 ? 'alta · poca varietà' : 'ok'
   const idx = [
     { label: 'Forma (CTL)', value: f(data.ctl), note: 'carico cronico, 42 gg', help: 'Media esponenziale (τ=42 giorni) del carico giornaliero (TRIMP di Edwards da zone FC) (Banister).' },
-    { label: 'Fatica (ATL)', value: f(data.atl), note: 'carico acuto, 7 gg', help: 'Media esponenziale (τ=7 giorni) del carico giornaliero (TRIMP di Edwards da zone FC).' },
-    { label: 'Freschezza (TSB)', value: f(data.tsb), note: tsbNote, help: 'CTL − ATL. Positivo = riposato, molto negativo = accumulo di fatica.' },
-    { label: 'ACWR', value: f(data.acwr, 2), note: acwrNote, help: 'Carico ultimi 7 gg / media settimanale degli ultimi 28 gg. 0,8–1,3 = zona ottimale, >1,5 = rischio infortuni.' },
+    { label: 'Carico acuto (ATL)', value: f(data.atl), note: 'media 7 gg', help: 'Media esponenziale (τ=7 giorni) del carico giornaliero (TRIMP di Edwards da zone FC). Misura il lavoro recente, non la stanchezza percepita.' },
+    { label: 'Bilancio (TSB)', value: f(data.tsb), note: phase ? `${tsbNote} · ${phase}` : tsbNote, help: 'CTL − ATL: carico recente rispetto alla media. Negativo nelle settimane di carico, positivo in scarico e prima delle gare: è atteso. Non considera sonno, HRV o recupero.' },
+    { label: 'ACWR', value: f(data.acwr, 2), note: acwrNote, help: 'Carico ultimi 7 gg / media settimanale degli ultimi 28 gg. 0,8–1,3 = zona ottimale, >1,5 = rischio infortuni. Con un ciclo 3+1 scende sotto 0,8 nella settimana di scarico.' },
     { label: 'Monotonia', value: f(data.monotony, 2), note: monoNote, help: 'Foster: media / deviazione standard del carico degli ultimi 7 giorni. >2 = allenamento troppo uniforme.' },
     { label: 'Strain', value: f(data.strain), note: 'carico sett. × monotonia', help: 'Foster: carico settimanale × monotonia.' },
   ]
