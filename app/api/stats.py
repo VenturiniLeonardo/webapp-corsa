@@ -4,8 +4,10 @@ Weighted pace is always total moving time / total distance, never a mean of pace
 """
 
 import calendar
+import math
 import statistics
 from bisect import bisect_left, bisect_right
+from collections import defaultdict
 from collections.abc import Sequence
 from dataclasses import dataclass, replace
 from datetime import UTC, date, datetime, timedelta
@@ -13,11 +15,11 @@ from typing import Annotated, Any, Literal
 
 from fastapi import APIRouter, Depends, HTTPException, Query
 from pydantic import BaseModel
-from sqlalchemy import ColumnElement, func, select
+from sqlalchemy import ColumnElement, func, or_, select
 
 from app.api.activities import PACE, Db, SportType
 from app.domain.models import Activity as A
-from app.domain.models import ActivityMetrics, BestEffort
+from app.domain.models import ActivityMetrics, BestEffort, Setting
 from app.metrics.engine import BEST_EFFORT_TARGETS
 
 router = APIRouter(prefix="/api")
@@ -40,6 +42,7 @@ TREND_VALUE: dict[str, tuple[Any, str]] = {
     "pace": (PACE, "s/km"),
     "ef": (ActivityMetrics.efficiency_factor, "(m/min)/bpm"),
     "hr": (A.avg_hr, "bpm"),
+    "cadence": (A.avg_cadence_spm, "spm"),
 }
 AGG = (
     func.count(),
@@ -374,7 +377,11 @@ def zones(s: Db, sc: Sc, bucket: Bucket = "week") -> Zones:
             select(bk, *z)
             .select_from(A)
             .join(ActivityMetrics, ActivityMetrics.activity_id == A.id)
-            .where(*sc.where(), ActivityMetrics.time_in_zones_s.is_not(None))
+            .where(
+                *sc.where(),
+                ActivityMetrics.time_in_zones_s.is_not(None),
+                or_(A.workout_type.is_(None), A.workout_type != "race"),  # races excluded
+            )
             .group_by(bk)
         )
     }
@@ -416,7 +423,7 @@ def theil_sen(xs: list[float], ys: list[float]) -> float | None:
 
 
 @router.get("/stats/trends")
-def trends(s: Db, sc: Sc, metric: Literal["pace", "ef", "hr"]) -> Trends:
+def trends(s: Db, sc: Sc, metric: Literal["pace", "ef", "hr", "cadence"]) -> Trends:
     """Steady runs only (PLAN §13.4): points, trailing 28-day median and Theil-Sen slope."""
     col, unit = TREND_VALUE[metric]
     rows = _steady(s, sc, col)
@@ -469,6 +476,145 @@ def top_weeks(s: Db, sc: Sc, limit: Annotated[int, Query(ge=1, le=100)] = 10) ->
         TopWeek(start=(st := date.fromisoformat(b)), end=_end(st, "week"), **_tot(*row))
         for b, *row in rows
     ]
+
+
+class Vo2(BaseModel):
+    vdot: float | None  # Daniels-Gilbert from the best recent effort
+    vdot_source: str | None
+    vdot_date: str | None
+    hr_based: float | None  # Swain %HRR method on steady runs, needs hr_max + hr_rest settings
+    hr_based_n: int
+
+
+class Prediction(BaseModel):
+    label: str
+    seconds: int
+
+
+class Fitness(BaseModel):
+    vo2max: Vo2
+    predictions: list[Prediction]  # Riegel from the VDOT effort
+    ctl: float | None  # Banister EWMA of daily Edwards TRIMP, tau 42 d
+    atl: float | None  # tau 7 d
+    tsb: float | None  # ctl - atl
+    acwr: float | None  # 7 d load / (28 d load / 4)
+    monotony: float | None  # Foster: mean/sd of 7 daily loads
+    strain: float | None  # weekly load * monotony
+
+
+VDOT_WINDOW_DAYS = 180
+PRED_TARGETS = {5000.0: "5K", 10000.0: "10K", 21097.5: "Half Marathon", 42195.0: "Marathon"}
+RIEGEL_K = 1.06
+
+
+def vdot(dist_m: float, secs: float) -> float:
+    """Daniels-Gilbert: VO2 demanded by the speed / fraction of VO2max sustainable for the time."""
+    t, v = secs / 60, dist_m / (secs / 60)
+    vo2 = -4.60 + 0.182258 * v + 0.000104 * v * v
+    frac = 0.8 + 0.1894393 * math.exp(-0.012778 * t) + 0.2989558 * math.exp(-0.1932605 * t)
+    return vo2 / frac
+
+
+def _load_indices(daily: dict[date, float], today: date) -> dict[str, float | None]:
+    if not daily:
+        return dict.fromkeys(("ctl", "atl", "tsb", "acwr", "monotony", "strain"))
+    ctl = atl = 0.0
+    day = min(daily)
+    while day <= today:
+        x = daily.get(day, 0.0)
+        ctl += (x - ctl) * (1 - math.exp(-1 / 42))
+        atl += (x - atl) * (1 - math.exp(-1 / 7))
+        day += timedelta(days=1)
+    last = [daily.get(today - timedelta(days=i), 0.0) for i in range(28)]
+    week, sd = last[:7], statistics.pstdev(last[:7])
+    acute, chronic = sum(week), sum(last) / 4
+    mono = statistics.mean(week) / sd if sd else None
+    return {
+        "ctl": ctl,
+        "atl": atl,
+        "tsb": ctl - atl,
+        "acwr": acute / chronic if chronic else None,
+        "monotony": mono,
+        "strain": acute * mono if mono else None,
+    }
+
+
+@router.get("/stats/fitness")
+def fitness(s: Db, sc: Sc) -> Fitness:
+    """Current-state indices, independent of the dashboard period (windows end today)."""
+    today = _today()
+    base = replace(sc, from_date=None, to_date=None)
+    since = today - timedelta(days=VDOT_WINDOW_DAYS)
+    best: tuple[float, float, int, str] | None = None  # vdot, dist, secs, date
+    for dist, secs, day in s.execute(
+        select(BestEffort.distance_m, BestEffort.elapsed_s, A.local_date)
+        .select_from(BestEffort)
+        .join(A, A.id == BestEffort.activity_id)
+        .outerjoin(ActivityMetrics, ActivityMetrics.activity_id == A.id)
+        .where(
+            *replace(base, from_date=since).where(),
+            ActivityMetrics.gps_suspect.is_not(True),
+            BestEffort.distance_m.in_([d for d in LABELS if d >= 1000]),  # 400m is anaerobic
+        )
+    ):
+        v = vdot(dist, secs)
+        if best is None or v > best[0]:
+            best = (v, dist, secs, day)
+
+    hr: dict[str, Any] = dict(
+        s.execute(
+            select(Setting.key, Setting.value).where(Setting.key.in_(("hr_max", "hr_rest")))
+        ).all()
+    )
+    est: list[float] = []
+    if hr.get("hr_max") and hr.get("hr_rest"):
+        span = hr["hr_max"] - hr["hr_rest"]
+        for d_m, mv, avg in s.execute(
+            select(A.distance_m, A.moving_s, A.avg_hr)
+            .select_from(A)
+            .join(ActivityMetrics, ActivityMetrics.activity_id == A.id)
+            .where(
+                *replace(base, from_date=today - timedelta(days=ROLLING_DAYS)).where(),
+                ActivityMetrics.is_steady.is_(True),
+                A.avg_hr.is_not(None),
+                A.moving_s > 0,
+                A.distance_m.is_not(None),
+            )
+        ):
+            frac = (avg - hr["hr_rest"]) / span
+            if 0.3 < frac <= 1:  # outside this the %HRR-%VO2R line is meaningless
+                v = float(d_m or 0) / (float(mv or 1) / 60)
+                est.append(0.2 * v / frac + 3.5)  # ACSM running VO2, Swain
+
+    daily: dict[date, float] = defaultdict(float)
+    for d, zs, mv in s.execute(
+        select(A.local_date, ActivityMetrics.time_in_zones_s, A.moving_s)
+        .select_from(A)
+        .join(ActivityMetrics, ActivityMetrics.activity_id == A.id)
+        .where(*replace(base, from_date=today - timedelta(days=VDOT_WINDOW_DAYS)).where())
+    ):
+        # Edwards TRIMP: minutes in zone k weighted k; no HR -> assume Z2 (ponytail: crude)
+        load = sum((k + 1) * t / 60 for k, t in enumerate(zs)) if zs else 2 * (mv or 0) / 60
+        daily[date.fromisoformat(d)] += load
+
+    preds = []
+    if best:
+        _, d1, t1, _ = best
+        preds = [
+            Prediction(label=lb, seconds=round(t1 * (d2 / d1) ** RIEGEL_K))
+            for d2, lb in PRED_TARGETS.items()
+        ]
+    return Fitness(
+        vo2max=Vo2(
+            vdot=best[0] if best else None,
+            vdot_source=LABELS[best[1]] if best else None,
+            vdot_date=best[3] if best else None,
+            hr_based=statistics.median(est) if est else None,
+            hr_based_n=len(est),
+        ),
+        predictions=preds,
+        **_load_indices(daily, today),
+    )
 
 
 @router.get("/records")

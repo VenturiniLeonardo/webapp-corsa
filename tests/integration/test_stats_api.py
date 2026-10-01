@@ -424,8 +424,34 @@ def test_types_filter_and_validation(engine, client):
         ("/api/stats/summary", {"from_date": "2026-12-01"}),
         ("/api/stats/distribution", {"field": "speed"}),
         ("/api/stats/distribution", {}),
-        ("/api/stats/trends", {"metric": "cadence"}),
+        ("/api/stats/trends", {"metric": "power"}),
         ("/api/stats/top-weeks", {"limit": 0}),
         ("/api/stats/calendar", {"year": 1800}),
     ):
         assert client.get(path, params=params).status_code == 422, (path, params)
+
+
+# --- fitness indices ------------------------------------------------------------------
+def test_vdot_reference_value():
+    assert stats.vdot(5000, 20 * 60) == pytest.approx(49.8, abs=0.2)  # Daniels table: 20:00 5K
+
+
+def test_fitness_endpoint(engine, client):
+    with Session(engine) as s, s.begin():
+        for i in range(8):
+            a = add(s, f"2026-09-{22 + i:02d}T06:00:00+00:00", 10000, 3000)
+            metrics(s, a, trimp=50.0)
+        s.add(BestEffort(activity_id=a.id, distance_m=5000.0, elapsed_s=1200, algo_version=1))
+
+    f = get(client, "/api/stats/fitness")
+    assert f["vo2max"]["vdot"] == pytest.approx(49.8, abs=0.2)
+    assert f["vo2max"]["vdot_source"] == "5K"
+    assert {p["label"]: p["seconds"] for p in f["predictions"]}["10K"] == round(1200 * 2**1.06)
+    assert f["acwr"] == pytest.approx(6 * 50 / (8 * 50 / 4))  # 6 runs in the last 7 d, 8 in 28 d
+    assert f["monotony"] == pytest.approx(6**0.5)  # 6 equal days + 1 rest day
+    assert f["ctl"] < f["atl"] and f["tsb"] == pytest.approx(f["ctl"] - f["atl"])
+
+
+def test_fitness_empty(client):
+    f = get(client, "/api/stats/fitness")
+    assert f["vo2max"]["vdot"] is None and f["ctl"] is None and f["predictions"] == []
