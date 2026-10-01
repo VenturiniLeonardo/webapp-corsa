@@ -144,6 +144,16 @@ def _col(pts: list[dict[str, Any]], k: str) -> list[Any]:
     return [p.get(k) for p in pts]
 
 
+def _hold(v: list[Any], t: list[float], gap: float = 15) -> list[Any]:
+    """Sensors report sparsely (e.g. HR every ~5 s): carry the last value forward up to `gap` s."""
+    out, last, lt = [], None, 0.0
+    for x, ti in zip(v, t, strict=True):
+        if x is not None:
+            last, lt = x, ti
+        out.append(x if x is not None else last if last is not None and ti - lt <= gap else None)
+    return out
+
+
 def _avg(v: list[Any]) -> float | None:
     v = [x for x in v if x]
     return round(fmean(v), 1) if v else None
@@ -188,22 +198,23 @@ def build_draft(
     for k, name in (("lat", "lat"), ("lng", "lng"), ("alt", "altitude"), ("hr", "hr"),
                     ("cad", "cadence"), ("power", "power")):  # fmt: skip
         if any(x is not None for x in col(k)):
-            ch[name] = col(k)
+            ch[name] = _hold(col(k), t) if k in ("hr", "cad", "power") else col(k)
     alt = [x for x in col("alt") if x is not None]
     hr = [x for x in col("hr") if x]
     m = {k: v for k, v in meta.items() if v is not None}
     elapsed = round(m.get("elapsed_s", t[-1]))
     avg_cad = _avg(col("cad"))
     indoor = bool(m.get("indoor")) or not has_gps
+    local_date = start.astimezone(ZoneInfo(TZ)).date().isoformat()
     draft = ActivityDraft(
         status="mapped",
         external_id=ext_id,
         source_start_time_utc=start_iso,
         sport_type="treadmill" if indoor else "run",
-        name=m.get("name"),
+        name=m.get("name") or f"Run {local_date}",  # FIT carries no title
         start_time_utc=start_iso,
         timezone=TZ,
-        local_date=start.astimezone(ZoneInfo(TZ)).date().isoformat(),
+        local_date=local_date,
         elapsed_s=elapsed,
         moving_s=round(m.get("moving_s", moving if moving > 0 else elapsed)),
         distance_m=m.get("distance_m", d[-1]),

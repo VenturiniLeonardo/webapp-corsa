@@ -111,3 +111,13 @@ def test_rejections(client):  # noqa: F811
     bomb = gzip.compress(b"\0" * (51 * 1024 * 1024))
     assert "too large" in _post(c, "x.gpx.gz", bomb).json()["detail"]
     assert c.post("/api/imports/file", content=b"x", headers={"X-Corsa": "1"}).status_code == 403
+    from app.ingest.files import _hold
+
+    assert _hold([None, 100, None, None, 110, None], [0, 1, 2, 30, 31, 32]) == [
+        None,
+        100,
+        100,
+        None,
+        110,
+        110,
+    ]

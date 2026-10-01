@@ -8,7 +8,7 @@ from typing import Annotated, Any, Literal
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Response
 from pydantic import BaseModel, ConfigDict, Field, StringConstraints
-from sqlalchemy import ColumnElement, SQLColumnExpression, delete, func, or_, select
+from sqlalchemy import ColumnElement, SQLColumnExpression, delete, func, or_, select, update
 from sqlalchemy.orm import Session
 
 from app.core.db import get_session
@@ -177,6 +177,10 @@ class ActivityPatch(BaseModel):
     """Only fields present in the body are applied; anything else is a 422."""
 
     model_config = ConfigDict(extra="forbid")
+    name: (
+        Annotated[str, StringConstraints(strip_whitespace=True, min_length=1, max_length=200)]
+        | None
+    ) = None
     notes: str | None = None
     workout_type: WorkoutType | None = None
     difficulty: Annotated[int, Field(ge=1, le=10)] | None = None
@@ -438,6 +442,18 @@ def patch_activity(aid: int, body: ActivityPatch, s: Db) -> ActivityOut:
         _set_tags(s, aid, body.tags)
     s.commit()
     return _out(s, ActivityOut, [act])[0]
+
+
+@router.delete("/activities/{aid}", status_code=204)
+def delete_activity(aid: int, s: Db) -> None:
+    """Hard delete incl. streams/metrics (FK cascade) and source records, so a re-upload works."""
+    act = _get(s, aid)
+    s.execute(update(Activity).where(Activity.duplicate_of_id == aid).values(duplicate_of_id=None))
+    act.primary_source_id = act.stream_source_id = None
+    s.flush()
+    s.execute(delete(SourceRecord).where(SourceRecord.activity_id == aid))
+    s.delete(act)
+    s.commit()
 
 
 @router.get("/tags")

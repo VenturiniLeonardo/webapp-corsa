@@ -307,9 +307,23 @@ def test_patch_updates_local_fields_only(engine, client):
     assert r.json()["notes"] is None and r.json()["workout_type"] is None
     assert client.get(f"/api/activities/{aid}").json()["activity"]["excluded_from_stats"] is True
 
-    for bad in ({"distance_m": 1}, {"name": "x"}, {"workout_type": "bogus"},
+    for bad in ({"distance_m": 1}, {"name": ""}, {"workout_type": "bogus"},
                 {"excluded_from_stats": None}, {"tags": [""]}):  # fmt: skip
         assert client.patch(f"/api/activities/{aid}", json=bad, headers=CSRF).status_code == 422
     assert (
         client.patch(f"/api/activities/{aid}", json={"notes": "x"}).status_code == 403
     )  # no X-Corsa
+
+
+def test_rename_and_delete(engine, client):
+    with Session(engine) as s, s.begin():
+        aid = add(s, "orig", dist=10000, mov=3000).id
+    r = client.patch(f"/api/activities/{aid}", json={"name": " Nuovo "}, headers=CSRF)
+    assert r.json()["name"] == "Nuovo"
+    assert (
+        client.delete(
+            f"/api/activities/{aid}", headers=CSRF | {"Content-Type": "application/json"}
+        ).status_code
+        == 204
+    )
+    assert client.get(f"/api/activities/{aid}").status_code == 404

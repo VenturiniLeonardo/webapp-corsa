@@ -6,7 +6,7 @@ import type { Feature, FeatureCollection } from 'geojson'
 import 'maplibre-gl/dist/maplibre-gl.css'
 import mlWorkerUrl from 'maplibre-gl/dist/maplibre-gl-worker.mjs?worker&url'
 import { type ReactNode, type RefObject, useCallback, useEffect, useMemo, useRef, useState } from 'react'
-import { Link, useParams } from 'react-router-dom'
+import { Link, useNavigate, useParams } from 'react-router-dom'
 import { api } from '../api/client'
 import ActivityReport from '../components/ActivityReport'
 import AiPanel from '../components/AiPanel'
@@ -144,6 +144,16 @@ export default function ActivityDetailPage() {
     },
   })
 
+  const nav = useNavigate()
+  const del = useMutation({
+    mutationFn: () => api(`/api/activities/${id}`, { method: 'DELETE' }),
+    onSuccess: () => {
+      qc.removeQueries({ queryKey: ['activity', id] })
+      qc.invalidateQueries({ queryKey: ['activities'] })
+      nav('/activities')
+    },
+  })
+
   const [xMode, setXMode] = useState<'distance' | 'time'>('distance')
   const [colorBy, setColorBy] = useState<ColorBy>('pace')
   const [hoverSplit, setHoverSplit] = useState<number | null>(null)
@@ -206,6 +216,21 @@ export default function ActivityDetailPage() {
         <div className="mr-auto min-w-0">
           <div className="text-xs tracking-[.08em] uppercase" style={{ fontFamily: FM, color: MUTED }}>{formatDate(a.start_time_utc, tz)}</div>
           <h1 className="mt-1 text-[44px] leading-none font-bold tracking-[.01em] text-[#eef1f4] uppercase" style={{ fontFamily: FC }}>{a.name ?? '—'}</h1>
+          <button
+            className="mt-1 mr-3 text-xs text-neutral-400 hover:text-[#eef1f4]"
+            onClick={() => {
+              const n = window.prompt('Nome allenamento', a.name ?? '')?.trim()
+              if (n) patch.mutate({ name: n })
+            }}
+          >
+            rinomina
+          </button>
+          <button
+            className="mt-1 text-xs text-red-400 hover:text-red-300"
+            onClick={() => window.confirm('Eliminare definitivamente questo allenamento?') && del.mutate()}
+          >
+            elimina
+          </button>
         </div>
         <select
           aria-label="Workout type"
