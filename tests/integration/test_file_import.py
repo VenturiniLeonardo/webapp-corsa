@@ -5,10 +5,10 @@ import zipfile
 
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session
+from test_hae_import import _workout, client  # noqa: F401
 
 from app.domain.models import Activity, SourceRecord, Stream
 from app.domain.stream_codec import decode_stream
-from tests.integration.test_hae_import import _workout, client  # noqa: F401
 
 H = {"X-Corsa": "1", "Content-Type": "application/octet-stream"}
 
