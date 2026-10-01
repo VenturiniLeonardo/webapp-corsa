@@ -19,4 +19,4 @@ jobs:
     needs: ci
     runs-on: self-hosted
     steps:
-      - run: cd /opt/corsa && ./scripts/deploy.sh
+      - run: cd /opt/corsa && bash scripts/deploy.sh
