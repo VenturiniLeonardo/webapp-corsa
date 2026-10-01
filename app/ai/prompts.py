@@ -10,7 +10,7 @@ from typing import Annotated, Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, StringConstraints
 
-PROMPT_VERSION = 2
+PROMPT_VERSION = 3
 
 Text = Annotated[str, StringConstraints(strip_whitespace=True, min_length=1, max_length=500)]
 
@@ -46,7 +46,9 @@ what they contained; at most mention them as a possible factor (a "hypothesis").
 - This is training-data analysis, not medicine: never diagnose or name medical conditions. If \
 something looks concerning (e.g. unusual heart rate), say it is unusual in the data and suggest \
 consulting a qualified professional.
-- Be concise and specific. Second person ("you"). English.
+- Be concise and specific. Address the runner in the second person.
+- Write ALL free-text values (summary, text, evidence, caveats) in Italian (second person singular, \
+"tu"). Keep the JSON keys and the "kind"/"data_sufficiency" values exactly as specified (English).
 - Reply with ONE JSON object and nothing else, exactly this shape:
 {"summary": str (<= 3 sentences), "insights": [{"kind": "observation"|"interpretation"|\
 "hypothesis", "text": str, "evidence": str}] (1-6 items, most useful first), "caveats": [str] \
