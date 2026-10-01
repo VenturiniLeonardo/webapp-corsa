@@ -10,7 +10,7 @@ import { Link, useNavigate, useParams } from 'react-router-dom'
 import { api } from '../api/client'
 import ActivityReport from '../components/ActivityReport'
 import AiPanel from '../components/AiPanel'
-import { field, FB, FC, FM, Fonts, MUTED, pill, surface } from '../components/ui'
+import { btnGhost, field, FB, FC, FM, Fonts, MUTED, pill, surface } from '../components/ui'
 import { formatDate, formatDistance, formatDuration, formatPace } from '../utils/formatters'
 
 // --- API shapes (app/api/activities.py) -------------------------------------
@@ -216,21 +216,6 @@ export default function ActivityDetailPage() {
         <div className="mr-auto min-w-0">
           <div className="text-xs tracking-[.08em] uppercase" style={{ fontFamily: FM, color: MUTED }}>{formatDate(a.start_time_utc, tz)}</div>
           <h1 className="mt-1 text-[44px] leading-none font-bold tracking-[.01em] text-[#eef1f4] uppercase" style={{ fontFamily: FC }}>{a.name ?? '—'}</h1>
-          <button
-            className="mt-1 mr-3 text-xs text-neutral-400 hover:text-[#eef1f4]"
-            onClick={() => {
-              const n = window.prompt('Nome allenamento', a.name ?? '')?.trim()
-              if (n) patch.mutate({ name: n })
-            }}
-          >
-            rinomina
-          </button>
-          <button
-            className="mt-1 text-xs text-red-400 hover:text-red-300"
-            onClick={() => window.confirm('Eliminare definitivamente questo allenamento?') && del.mutate()}
-          >
-            elimina
-          </button>
         </div>
         <select
           aria-label="Workout type"
@@ -271,6 +256,26 @@ export default function ActivityDetailPage() {
           </a>
         )}
         {patch.isError && <span className="text-xs text-red-400">Save failed</span>}
+        <div className="ml-auto flex gap-2">
+          <button
+            className={`${btnGhost} gap-1.5`}
+            onClick={() => {
+              const n = window.prompt('Nome allenamento', a.name ?? '')?.trim()
+              if (n) patch.mutate({ name: n })
+            }}
+          >
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M12 20h9" /><path d="M16.5 3.5a2.1 2.1 0 0 1 3 3L7 19l-4 1 1-4Z" /></svg>
+            Rinomina
+          </button>
+          <button
+            className={`${btnGhost} gap-1.5 hover:!border-red-400/60 hover:!text-red-400`}
+            disabled={del.isPending}
+            onClick={() => window.confirm('Eliminare definitivamente questo allenamento?') && del.mutate()}
+          >
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M3 6h18" /><path d="M8 6V4h8v2" /><path d="M19 6l-1 14H6L5 6" /></svg>
+            Elimina
+          </button>
+        </div>
       </header>
 
       {/* 2. stats */}
@@ -758,7 +763,7 @@ function Charts({ st, series, settings, onHover }: { st: Streams; series: Series
         },
       },
       xAxis: { type: 'value', min: 'dataMin', max: 'dataMax', axisLabel: { formatter: axisX }, splitLine: { show: false }, axisLine: { lineStyle: { color: C.grid } } },
-      yAxis: { type: 'value', scale: true, inverse: extra.inverse, max: extra.max, splitLine: { lineStyle: { color: C.grid } }, axisLabel: { formatter: (v: number) => fmt(v) } },
+      yAxis: { type: 'value', scale: true, inverse: extra.inverse, min: extra.inverse ? (v: { min: number }) => Math.floor(v.min - 15) : undefined, max: extra.max, splitLine: { lineStyle: { color: C.grid } }, axisLabel: { formatter: (v: number) => fmt(v) } },
       dataZoom: [{ type: 'inside', throttle: 16 }],
       series: [
         {
@@ -779,7 +784,7 @@ function Charts({ st, series, settings, onHover }: { st: Streams; series: Series
     })
 
     const out: [string, EChartsOption][] = []
-    if (has(series.pace)) out.push(['pace', mk('Pace', series.pace, C.pace, (v) => formatPace(v).replace(' /km', ''), { inverse: true, max: PACE_CLAMP })])
+    if (has(series.pace)) out.push(['pace', mk('Pace', series.pace, C.pace, (v) => formatPace(v).replace(' /km', ''), { inverse: true, max: PACE_CLAMP + 15 })])
     if (has(st.hr)) {
       const z = settings?.hr_zones
       const hrs = st.hr!.filter((v): v is number => v != null)
