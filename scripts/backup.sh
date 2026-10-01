@@ -31,4 +31,7 @@ if [ "$use" -ge 80 ]; then echo "disk usage ${use}% >= 80%" >&2; exit 1; fi
 used=$(bucket_bytes)
 if [ "$used" -ge $((LIMIT / 10 * 8)) ]; then echo "bucket usage $used / $LIMIT bytes >= 80%" >&2; exit 1; fi
 
+# ponytail: nightly liveness only, not replica lag; add a `litestream ltx` age check if lag matters
+if command -v litestream >/dev/null && ! systemctl is-active --quiet litestream; then echo "litestream service not active" >&2; exit 1; fi
+
 ping ""
