@@ -21,12 +21,14 @@ def main() -> None:
     for sig in (signal.SIGINT, signal.SIGTERM):
         signal.signal(sig, lambda *_: stop.set())
 
-    queue.recover_stale_jobs()
     next_pull = 0.0
     while not stop.is_set():
         if get_settings().INTERVALS_API_KEY and time.monotonic() >= next_pull:
             queue.enqueue("intervals_sync", {})  # dedups against queued/running
             next_pull = time.monotonic() + INTERVALS_EVERY_S
+        # every loop, not just at startup: a restart within STALE_AFTER of a heartbeat
+        # would otherwise leave that job 'running' until the next restart
+        queue.recover_stale_jobs()
         if job := queue.claim_job():
             runner.execute(job)  # heartbeats go out with each per-activity progress tick
         else:
