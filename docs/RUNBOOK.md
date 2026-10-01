@@ -79,7 +79,8 @@ Docker starts on boot and containers use `restart: unless-stopped`, so no app un
 ## 2. Deploy / rollback
 
 - Deploy: `cd /opt/corsa && ./scripts/deploy.sh` (keeps last 5 `data/pre-deploy-*.db`). Tag stable releases `vX.Y.Z`.
-- Rollback: `git checkout <prev-tag> && ./scripts/deploy.sh`.
+- Auto-deploy: push to `main` -> CI -> `deploy-prod.yml` on a self-hosted runner on the VM. Setup: GitHub repo > Settings > Actions > Runners > New self-hosted runner (Linux ARM64), install in `~/actions-runner` as the user that owns `/opt/corsa` and is in the `docker` group, then `sudo ./svc.sh install <user> && sudo ./svc.sh start`. A failing deploy leaves the old containers running only if the build fails; if `healthz` fails, roll back as below.
+- Rollback: `git checkout <prev-tag> && ./scripts/deploy.sh` (a later push to `main` will deploy main again; `git checkout main` after fixing).
 - If the migration was not backward-compatible: `docker compose stop && cp data/pre-deploy-<ts>.db data/corsa.db && rm -f data/corsa.db-wal data/corsa.db-shm`, checkout old tag, deploy.
 
 ## 3. Disaster recovery
@@ -115,6 +116,7 @@ Pass = integrity ok, count within last-night delta, latest date matches. Also ru
 | OCI Customer Secret Key | OCI console → user → create new key → update `/etc/corsa/backup.env` → `sudo ./scripts/backup.sh` succeeds → delete old key. |
 | restic password | `restic key add` (new) → update `backup.env` → `restic key remove <old-id>` → store in password manager. Verify `restic snapshots`. |
 | healthchecks URL | Regenerate ping key/UUID → update `backup.env` and `.env` (sync ping) → `docker compose up -d`. |
+| OpenRouter API key | openrouter.ai → Keys → create new → `OPENROUTER_API_KEY` in `.env` → `docker compose up -d` → delete old key. Empty value disables AI. |
 | Tailscale | Machine key expiry: `sudo tailscale up --ssh --hostname corsa` (re-auth) or disable key expiry in admin console. |
 
 After any `.env` change: update the copy in the password manager, then `docker compose up -d`. Never commit secrets.
@@ -124,3 +126,14 @@ After any `.env` change: update the copy in the password manager, then `docker c
 - Logs: `docker compose logs --tail=100 api worker`; failed jobs in `/sync`.
 - Disk: `df -h /opt/corsa/data` (backup fails at ≥ 80%).
 - Strava base URL moves to `api-v3.strava.com` by 2027-01-04: change the configurable base URL in `.env`.
+
+## 6. AI analysis (OpenRouter)
+
+Design: `docs/PLAN.md` §26.
+
+- Enable: set `OPENROUTER_API_KEY=<key>` in `.env` (never in git, never in the frontend), `docker compose up -d`. Empty = disabled; the UI says so.
+- Free models: in OpenRouter account → Privacy, the `:free` endpoints may require allowing prompt logging/training by the provider. Decide before enabling (§26.6).
+- Tuning (`.env`, all optional): `AI_PRIMARY_MODEL`, `AI_FALLBACK_MODEL_1`, `AI_FALLBACK_MODEL_2`, `AI_TIMEOUT_S` (60), `AI_MAX_TOKENS` (4000), `AI_TEMPERATURE` (0.2), `AI_MAX_RETRIES` (1), `AI_RETRY_BACKOFF_S` (2), `AI_MAX_WAIT_S` (10), `AI_DAILY_LIMIT` (40), `AI_MINUTE_LIMIT` (10).
+- Usage today: `sqlite3 data/corsa.db "SELECT value FROM settings WHERE key='ai_usage'"`. Reset: delete that row.
+- Fallbacks/errors: `docker compose logs api | grep "ai:"`.
+- Drop all cached analyses: `sqlite3 data/corsa.db "DELETE FROM ai_analyses"`.

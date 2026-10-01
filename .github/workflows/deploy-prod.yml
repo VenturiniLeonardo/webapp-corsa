@@ -1,0 +1,22 @@
+name: Deploy
+
+# Push to main -> CI gate -> self-hosted runner on the VM runs deploy.sh.
+# The VM is private (Tailscale), so it pulls the job outbound; no inbound ports.
+on:
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+concurrency: deploy-prod
+
+jobs:
+  ci:
+    uses: ./.github/workflows/ci.yml
+
+  deploy:
+    needs: ci
+    runs-on: self-hosted
+    steps:
+      - run: cd /opt/corsa && ./scripts/deploy.sh
