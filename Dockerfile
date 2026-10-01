@@ -1,6 +1,6 @@
 FROM node:20-alpine AS web
 WORKDIR /web
-COPY web/package.json web/package-lock.json ./
+COPY web/package.json web/package-lock.json web/.npmrc ./
 RUN npm ci
 COPY web/ ./
 RUN npm run build
