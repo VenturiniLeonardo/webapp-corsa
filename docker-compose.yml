@@ -1,0 +1,27 @@
+x-app: &app
+  build: .
+  env_file:
+    - path: .env
+      required: false
+  volumes:
+    - ./data:/data
+  deploy:
+    resources:
+      limits:
+        memory: 512M
+  logging:
+    driver: json-file
+    options:
+      max-size: "10m"
+      max-file: "3"
+  restart: unless-stopped
+
+services:
+  api:
+    <<: *app
+    command: sh -c "alembic upgrade head && uvicorn app.main:app --host 0.0.0.0 --port 8000"
+    ports:
+      - "127.0.0.1:8000:8000"
+  worker:
+    <<: *app
+    command: python -m app.worker

@@ -1,0 +1,25 @@
+@import "tailwindcss";
+
+@theme {
+  --color-bg: #0a0a0c;
+  --color-panel: #121216;
+  --color-border: #22222a;
+  --color-accent: #3b82f6;
+}
+
+:root {
+  color-scheme: dark;
+}
+
+body {
+  @apply bg-bg text-neutral-200 tabular-nums;
+  font-family: Inter, system-ui, sans-serif;
+}
+
+@theme {
+  --color-pace: #3b82f6;
+  --color-hr: #ef4444;
+  --color-elevation: #6b7280;
+  --color-cadence: #a855f7;
+  --color-power: #f59e0b;
+}

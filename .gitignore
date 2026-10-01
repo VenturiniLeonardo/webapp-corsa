@@ -1,0 +1,15 @@
+data/
+.env
+node_modules/
+.pytest_cache/
+.ruff_cache/
+.mypy_cache/
+.venv/
+__pycache__/
+dist/
+build/
+test-results/
+playwright-report/
+corsa.db*
+export_data.zip
+*.egg-info/

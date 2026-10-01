@@ -1,0 +1,737 @@
+import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
+import * as echarts from 'echarts'
+import type { EChartsOption } from 'echarts'
+import { type ExpressionSpecification, type GeoJSONSource, LngLatBounds, Map as MlMap, Marker } from 'maplibre-gl'
+import type { Feature, FeatureCollection } from 'geojson'
+import 'maplibre-gl/dist/maplibre-gl.css'
+import { type ReactNode, type RefObject, useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import { Link, useParams } from 'react-router-dom'
+import { api } from '../api/client'
+import { formatDate, formatDistance, formatDuration, formatPace } from '../utils/formatters'
+
+// --- API shapes (app/api/activities.py) -------------------------------------
+type Summary = {
+  id: number
+  name: string | null
+  sport_type: string
+  workout_type: string | null
+  start_time_utc: string
+  timezone: string | null
+  distance_m: number | null
+  moving_s: number | null
+  avg_hr: number | null
+}
+type Activity = Summary & {
+  notes: string | null
+  elapsed_s: number | null
+  elev_gain_m: number | null
+  elev_loss_m: number | null
+  max_hr: number | null
+  avg_cadence_spm: number | null
+  avg_power_w: number | null
+  calories_kcal: number | null
+  excluded_from_stats: boolean
+}
+type Lap = {
+  idx: number
+  distance_m: number | null
+  moving_s: number | null
+  elapsed_s: number | null
+  avg_speed_ms: number | null
+  avg_hr: number | null
+  elev_gain_m: number | null
+}
+type Detail = {
+  activity: Activity
+  metrics: { efficiency_factor: number | null; time_in_zones_s: number[] | null } | null
+  laps: Lap[]
+  splits: Lap[]
+  best_efforts: { distance_m: number; elapsed_s: number; is_pr: boolean }[]
+  sources: { id: number; source: string; external_id: string; status: string; fetched_at: string | null; mapper_version: number | null; is_primary: boolean }[]
+  tags: string[]
+  duplicate_candidates: Summary[]
+}
+type Similar = Summary & {
+  pace_s_per_km: number | null
+  efficiency_factor: number | null
+  pace_delta_s_per_km: number | null
+  hr_delta_bpm: number | null
+  ef_delta: number | null
+}
+type Ch = 'time' | 'distance' | 'hr' | 'speed' | 'lat' | 'lng' | 'altitude' | 'cadence' | 'power'
+type Streams = Partial<Record<Ch, (number | null)[]>>
+type Settings = { hr_max: number | null; hr_zones: number[] | null }
+
+const WORKOUTS = ['easy', 'long', 'workout', 'race', 'other']
+const PACE_CLAMP = 600 // 10:00/km
+const ZONE_COLORS = ['#3f1d1d', '#7f1d1d', '#b91c1c', '#ef4444', '#fca5a5'] // sequential, not rainbow
+const C = { pace: '#3b82f6', hr: '#ef4444', elev: '#6b7280', cad: '#a855f7', pow: '#f59e0b', grid: '#22222a', text: '#a3a3a3' }
+const EFFORTS: [number, string][] = [[400, '400m'], [1000, '1k'], [1609.34, '1mi'], [5000, '5k'], [10000, '10k'], [21097.5, '21.1k'], [42195, '42.2k']]
+const mono = 'font-mono tabular-nums'
+const field = 'rounded border border-border bg-panel px-2 py-1 text-sm'
+const GROUP = 'activity'
+
+// --- helpers ----------------------------------------------------------------
+const clock = (s: number) => {
+  const t = Math.round(s)
+  const h = Math.floor(t / 3600)
+  const mm = String(Math.floor((t % 3600) / 60)).padStart(h ? 2 : 1, '0')
+  return `${h ? `${h}:` : ''}${mm}:${String(t % 60).padStart(2, '0')}`
+}
+const lapPace = (l: Lap) => (l.moving_s && l.distance_m ? (l.moving_s * 1000) / l.distance_m : l.avg_speed_ms ? 1000 / l.avg_speed_ms : null)
+const sign = (d: number, s: string) => `${d < 0 ? '−' : '+'}${s}`
+function median(xs: (number | null | undefined)[]): number | null {
+  const s = xs.filter((x): x is number => x != null && Number.isFinite(x)).sort((a, b) => a - b)
+  if (!s.length) return null
+  const m = s.length >> 1
+  return s.length % 2 ? s[m] : (s[m - 1] + s[m]) / 2
+}
+function nearest(xs: number[], v: number) {
+  let lo = 0
+  let hi = xs.length - 1
+  while (lo < hi) {
+    const m = (lo + hi) >> 1
+    if (xs[m] < v) lo = m + 1
+    else hi = m
+  }
+  return lo
+}
+function fillForward(xs: (number | null)[]): number[] {
+  let last = 0
+  return xs.map((x) => (x == null ? last : (last = x)))
+}
+const pct = (xs: number[], p: number) => [...xs].sort((a, b) => a - b)[Math.floor((xs.length - 1) * p)]
+const has = (xs?: (number | null)[]) => !!xs?.some((x) => x != null)
+const effortLabel = (d: number) => EFFORTS.reduce((a, b) => (Math.abs(b[0] - d) < Math.abs(a[0] - d) ? b : a))[1]
+
+// --- page -------------------------------------------------------------------
+export default function ActivityDetailPage() {
+  const id = Number(useParams().id)
+  const qc = useQueryClient()
+  const detail = useQuery({ queryKey: ['activity', id], queryFn: () => api<Detail>(`/api/activities/${id}`) })
+  const streams = useQuery({
+    queryKey: ['streams', id],
+    queryFn: () => api<{ channels: Streams }>(`/api/activities/${id}/streams`).then((r) => r.channels),
+    staleTime: Infinity,
+  })
+  const similar = useQuery({ queryKey: ['similar', id], queryFn: () => api<Similar[]>(`/api/activities/${id}/similar`) })
+  const settings = useQuery({ queryKey: ['settings'], queryFn: () => api<Settings>('/api/settings') })
+  const patch = useMutation({
+    mutationFn: (body: Record<string, unknown>) => api(`/api/activities/${id}`, { method: 'PATCH', body: JSON.stringify(body) }),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ['activity', id] })
+      qc.invalidateQueries({ queryKey: ['activities'] })
+    },
+  })
+
+  const [xMode, setXMode] = useState<'distance' | 'time'>('distance')
+  const [colorBy, setColorBy] = useState<'pace' | 'hr'>('pace')
+  const [hoverSplit, setHoverSplit] = useState<number | null>(null)
+  const cursor = useRef<((i: number | null) => void) | null>(null)
+
+  const st = streams.data
+  const series = useMemo(() => {
+    if (!st?.time?.length) return null
+    const mode: Series['mode'] = xMode === 'distance' && has(st.distance) ? 'distance' : 'time'
+    const x = mode === 'distance' ? fillForward(st.distance!).map((d) => d / 1000) : fillForward(st.time)
+    const pace = (st.speed ?? []).map((v) => (v == null ? null : v > 0 ? Math.min(1000 / v, PACE_CLAMP) : PACE_CLAMP))
+    return { mode, x, pace, dist: st.distance ? fillForward(st.distance) : null }
+  }, [st, xMode])
+
+  const splits = detail.data?.splits
+  const splitEnds = useMemo(() => {
+    const ends: number[] = []
+    for (const s of splits ?? []) ends.push((ends.at(-1) ?? 0) + (s.distance_m ?? 0))
+    return ends
+  }, [splits])
+
+  // ponytail: axis-pointer events fire once per connected chart; handler is O(log n) + a no-op setState
+  const onHover = useCallback(
+    (v: number | null) => {
+      if (!series || v == null) {
+        cursor.current?.(null)
+        setHoverSplit(null)
+        return
+      }
+      const i = nearest(series.x, v)
+      cursor.current?.(i)
+      const d = series.dist?.[i]
+      setHoverSplit(d == null || !splitEnds.length ? null : Math.min(nearest(splitEnds, d), splitEnds.length - 1))
+    },
+    [series, splitEnds],
+  )
+
+  if (detail.isPending) return <p className="text-sm text-neutral-500">Loading…</p>
+  if (detail.isError) return <p className="text-sm text-red-400">Failed to load activity.</p>
+  const d = detail.data
+  const a = d.activity
+  const tz = a.timezone ?? 'UTC'
+  const strava = d.sources.find((s) => s.source === 'strava')
+  const ef = d.metrics?.efficiency_factor ?? null
+  const pace = a.moving_s && a.distance_m ? (a.moving_s * 1000) / a.distance_m : null
+  const sim = similar.data ?? []
+  const best1k = d.best_efforts.find((b) => b.distance_m === 1000)?.elapsed_s
+  const alt = (st?.altitude ?? []).filter((x): x is number => x != null)
+
+  const delta = (me: number | null, others: (number | null)[], fmt: (x: number) => string) => {
+    const m = median(others)
+    return me == null || m == null ? undefined : sign(me - m, fmt(Math.abs(me - m)))
+  }
+
+  return (
+    <div className="space-y-8">
+      {/* 1. header */}
+      <header className="flex flex-wrap items-center gap-x-3 gap-y-2">
+        <h1 className="text-lg text-neutral-100">{a.name ?? '—'}</h1>
+        <span className={`text-sm text-neutral-400 ${mono}`}>{formatDate(a.start_time_utc, tz)}</span>
+        <select
+          aria-label="Workout type"
+          className={`${field} min-h-10 md:min-h-0`}
+          value={a.workout_type ?? ''}
+          onChange={(e) => patch.mutate({ workout_type: e.target.value || null })}
+        >
+          <option value="">—</option>
+          {WORKOUTS.map((w) => (
+            <option key={w}>{w}</option>
+          ))}
+        </select>
+        <label className="flex items-center gap-1 text-xs text-neutral-400">
+          <input type="checkbox" checked={a.excluded_from_stats} onChange={(e) => patch.mutate({ excluded_from_stats: e.target.checked })} />
+          exclude from stats
+        </label>
+        {d.sources.map((s) => (
+          <span key={s.id} className="rounded border border-border px-1 text-xs text-neutral-400" title={s.source}>
+            {s.source === 'strava' ? 'Strava' : s.source.replace('file_', '').toUpperCase()}
+          </span>
+        ))}
+        {strava && (
+          <a href={`https://www.strava.com/activities/${strava.external_id}`} target="_blank" rel="noreferrer" className="text-sm text-accent hover:underline">
+            View on Strava
+          </a>
+        )}
+        {patch.isError && <span className="text-xs text-red-400">Save failed</span>}
+      </header>
+
+      {/* 2. stats */}
+      <section className="grid grid-cols-2 gap-x-6 gap-y-4 lg:grid-cols-4">
+        <Group title="Time / distance">
+          <Stat label="Distance" value={a.distance_m != null ? formatDistance(a.distance_m) : '—'} delta={delta(a.distance_m, sim.map((s) => s.distance_m), (x) => `${(x / 1000).toFixed(2)} km`)} />
+          <Stat label="Moving" value={a.moving_s != null ? formatDuration(a.moving_s) : '—'} delta={delta(a.moving_s, sim.map((s) => s.moving_s), formatDuration)} />
+          <Stat label="Total" value={a.elapsed_s != null ? formatDuration(a.elapsed_s) : '—'} />
+          <Stat label="Pace" value={formatPace(pace)} delta={delta(pace, sim.map((s) => s.pace_s_per_km), (x) => `${Math.round(x)} s/km`)} />
+          <Stat label="Best 1 km" value={best1k != null ? formatPace(best1k) : '—'} />
+        </Group>
+        <Group title="Heart">
+          <Stat label="Avg HR" value={a.avg_hr != null ? `${Math.round(a.avg_hr)} bpm` : '—'} delta={delta(a.avg_hr, sim.map((s) => s.avg_hr), (x) => `${Math.round(x)}`)} />
+          <Stat label="Max HR" value={a.max_hr != null ? `${Math.round(a.max_hr)} bpm` : '—'} />
+          <Stat label="EF" value={ef != null ? ef.toFixed(2) : '—'} delta={delta(ef, sim.map((s) => s.efficiency_factor), (x) => x.toFixed(2))} />
+        </Group>
+        <Group title="Terrain">
+          <Stat label="D+ / D−" value={`${a.elev_gain_m != null ? Math.round(a.elev_gain_m) : '—'} / ${a.elev_loss_m != null ? Math.round(a.elev_loss_m) : '—'} m`} />
+          <Stat label="Alt min / max" value={alt.length ? `${Math.round(Math.min(...alt))} / ${Math.round(Math.max(...alt))} m` : '—'} />
+        </Group>
+        <Group title="Other">
+          <Stat label="Cadence" value={a.avg_cadence_spm != null ? `${Math.round(a.avg_cadence_spm)} spm` : '—'} />
+          <Stat label="Power" value={a.avg_power_w != null ? `${Math.round(a.avg_power_w)} W` : '—'} est="Estimated by the provider, not measured by a power meter" />
+          <Stat label="Calories" value={a.calories_kcal != null ? `${a.calories_kcal} kcal` : '—'} est="Estimated from HR/pace and body data" />
+        </Group>
+        {sim.length > 0 && <p className="col-span-full text-xs text-neutral-500">Δ vs median of {sim.length} similar runs</p>}
+      </section>
+
+      {/* 3. map | splits */}
+      <section className="grid gap-4 xl:grid-cols-[3fr_2fr]">
+        <div className="space-y-1">
+          <div className="flex gap-1 text-xs">
+            {(['pace', 'hr'] as const).map((k) => (
+              <button key={k} aria-pressed={colorBy === k} onClick={() => setColorBy(k)} className={`${field} min-h-10 md:min-h-0 ${colorBy === k ? 'border-accent text-accent' : 'text-neutral-400'}`}>
+                {k === 'pace' ? 'Pace' : 'HR'}
+              </button>
+            ))}
+          </div>
+          {has(st?.lat) && has(st?.lng) ? (
+            <TrackMap st={st!} colorBy={colorBy} cursor={cursor} />
+          ) : (
+            <p className="flex h-60 items-center justify-center border border-border text-sm text-neutral-500">{streams.isPending ? 'Loading…' : 'No GPS track'}</p>
+          )}
+        </div>
+        <Splits splits={d.splits} hl={hoverSplit} />
+      </section>
+
+      {/* 4. charts */}
+      {series && st && (
+        <section className="space-y-2">
+          <div className="flex gap-1 text-xs">
+            {(['distance', 'time'] as const).map((k) => (
+              <button key={k} aria-pressed={series.mode === k} onClick={() => setXMode(k)} className={`${field} min-h-10 md:min-h-0 ${series.mode === k ? 'border-accent text-accent' : 'text-neutral-400'}`}>
+                {k === 'distance' ? 'Distance' : 'Time'}
+              </button>
+            ))}
+          </div>
+          <Charts st={st} series={series} settings={settings.data} onHover={onHover} />
+        </section>
+      )}
+
+      {/* 5. zones */}
+      {d.metrics?.time_in_zones_s && <Zones secs={d.metrics.time_in_zones_s} />}
+
+      {/* 6. best efforts */}
+      {d.best_efforts.length > 0 && (
+        <Section title="Best efforts">
+          <table className="w-full max-w-md text-sm">
+            <tbody className={mono}>
+              {d.best_efforts.map((b) => (
+                <tr key={b.distance_m} className="border-b border-border">
+                  <td className="py-1 pr-3 font-sans text-neutral-400">{effortLabel(b.distance_m)}</td>
+                  <td className="pr-3 text-right">{clock(b.elapsed_s)}</td>
+                  <td className="pr-3 text-right text-neutral-400">{formatPace((b.elapsed_s * 1000) / b.distance_m)}</td>
+                  <td className="w-10">{b.is_pr && <span className="rounded-sm border border-accent px-1 text-xs text-accent">PR</span>}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </Section>
+      )}
+
+      {/* 7. similar */}
+      {sim.length > 0 && (
+        <Section title="Similar runs">
+          <div className="overflow-x-auto">
+            <table className="w-full text-sm">
+              <thead className="border-b border-border text-left text-xs text-neutral-400">
+                <tr>
+                  {['Date', 'Name', 'Dist', 'Pace', 'Δ', 'HR', 'Δ', 'EF', 'Δ'].map((h, i) => (
+                    <th key={i} className={`py-1 pr-3 font-normal ${i > 1 ? 'text-right' : ''}`}>{h}</th>
+                  ))}
+                </tr>
+              </thead>
+              <tbody className={mono}>
+                {sim.map((s) => (
+                  <tr key={s.id} className="border-b border-border">
+                    <td className="py-1 pr-3 whitespace-nowrap">{formatDate(s.start_time_utc, s.timezone ?? 'UTC').slice(0, 11)}</td>
+                    <td className="max-w-48 truncate pr-3 font-sans">
+                      <Link to={`/activities/${s.id}`} className="hover:text-accent">{s.name ?? '—'}</Link>
+                    </td>
+                    <td className="pr-3 text-right">{s.distance_m != null ? formatDistance(s.distance_m) : '—'}</td>
+                    <td className="pr-3 text-right">{formatPace(s.pace_s_per_km)}</td>
+                    <td className="pr-3 text-right text-neutral-500">{s.pace_delta_s_per_km != null ? sign(s.pace_delta_s_per_km, `${Math.round(Math.abs(s.pace_delta_s_per_km))}s`) : '—'}</td>
+                    <td className="pr-3 text-right">{s.avg_hr != null ? Math.round(s.avg_hr) : '—'}</td>
+                    <td className="pr-3 text-right text-neutral-500">{s.hr_delta_bpm != null ? sign(s.hr_delta_bpm, `${Math.round(Math.abs(s.hr_delta_bpm))}`) : '—'}</td>
+                    <td className="pr-3 text-right">{s.efficiency_factor?.toFixed(2) ?? '—'}</td>
+                    <td className="text-right text-neutral-500">{s.ef_delta != null ? sign(s.ef_delta, Math.abs(s.ef_delta).toFixed(2)) : '—'}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+          <p className="text-xs text-neutral-500">Δ = this run minus that run</p>
+        </Section>
+      )}
+
+      {/* 8. device laps, only when they differ from the km splits */}
+      {d.laps.length > 0 && d.laps.length !== d.splits.length && (
+        <Section title="Device laps">
+          <Splits splits={d.laps} hl={null} bare />
+        </Section>
+      )}
+
+      {/* 9. notes & tags */}
+      <Editor key={a.id} notes={a.notes ?? ''} tags={d.tags} save={patch.mutate} />
+
+      {/* 10. sources */}
+      <details className="border-t border-border pt-2 text-sm">
+        <summary className="cursor-pointer text-neutral-400">Sources &amp; raw data</summary>
+        <div className="mt-2 space-y-3 overflow-x-auto">
+          <table className="text-xs">
+            <thead className="text-left text-neutral-500">
+              <tr>
+                {['Source', 'External id', 'Status', 'Fetched', 'Mapper', ''].map((h) => (
+                  <th key={h} className="pr-3 font-normal">{h}</th>
+                ))}
+              </tr>
+            </thead>
+            <tbody className={mono}>
+              {d.sources.map((s) => (
+                <tr key={s.id}>
+                  <td className="pr-3">{s.source}</td>
+                  <td className="pr-3">{s.external_id}</td>
+                  <td className="pr-3">{s.status}</td>
+                  <td className="pr-3">{s.fetched_at ?? '—'}</td>
+                  <td className="pr-3">v{s.mapper_version ?? '—'}</td>
+                  <td>{s.is_primary && 'primary'}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+          {d.duplicate_candidates.length > 0 && (
+            <p className="text-xs text-neutral-400">
+              Duplicate candidates:{' '}
+              {d.duplicate_candidates.map((c) => (
+                <Link key={c.id} to={`/activities/${c.id}`} className="mr-2 text-accent">#{c.id}</Link>
+              ))}
+            </p>
+          )}
+          <pre className={`max-h-96 overflow-auto border border-border bg-panel p-2 text-xs ${mono}`}>{JSON.stringify(d, null, 2)}</pre>
+        </div>
+      </details>
+    </div>
+  )
+}
+
+// --- pieces -----------------------------------------------------------------
+function Section({ title, children }: { title: string; children: ReactNode }) {
+  return (
+    <section className="space-y-2">
+      <h2 className="text-xs tracking-wide text-neutral-500 uppercase">{title}</h2>
+      {children}
+    </section>
+  )
+}
+
+function Group({ title, children }: { title: string; children: ReactNode }) {
+  return (
+    <div>
+      <h2 className="mb-1 text-xs tracking-wide text-neutral-500 uppercase">{title}</h2>
+      <dl className="space-y-0.5">{children}</dl>
+    </div>
+  )
+}
+
+function Stat({ label, value, delta, est }: { label: string; value: string; delta?: string; est?: string }) {
+  return (
+    <div className="flex items-baseline justify-between gap-2 text-sm">
+      <dt className="text-neutral-400">
+        {label}
+        {est && (
+          <abbr title={est} className="ml-1 text-[10px] text-neutral-500 no-underline">
+            est.
+          </abbr>
+        )}
+      </dt>
+      <dd className={`text-right ${mono}`}>
+        {value}
+        {delta && <span className="ml-1.5 text-xs text-neutral-500">{delta}</span>}
+      </dd>
+    </div>
+  )
+}
+
+function Splits({ splits, hl, bare }: { splits: Lap[]; hl: number | null; bare?: boolean }) {
+  const paces = splits.map(lapPace)
+  const avg = median(paces)
+  const maxDev = Math.max(1, ...paces.map((p) => (p != null && avg != null ? Math.abs(p - avg) : 0)))
+  const hlRef = useRef<HTMLTableRowElement>(null)
+  useEffect(() => {
+    hlRef.current?.scrollIntoView({ block: 'nearest' })
+  }, [hl])
+  if (!splits.length) return bare ? null : <p className="text-sm text-neutral-500">No splits.</p>
+  return (
+    <div className={bare ? '' : 'max-h-[440px] overflow-y-auto'}>
+      <table className="w-full text-sm">
+        <thead className="sticky top-0 border-b border-border bg-bg text-left text-xs text-neutral-400">
+          <tr>
+            <th className="py-1 pr-2 font-normal">{bare ? 'Lap' : 'Km'}</th>
+            <th className="pr-2 text-right font-normal">Pace</th>
+            <th className="w-1/3 font-normal" />
+            <th className="pr-2 text-right font-normal">HR</th>
+            <th className="text-right font-normal">D+</th>
+          </tr>
+        </thead>
+        <tbody className={mono}>
+          {splits.map((s, i) => {
+            const p = paces[i]
+            const dev = p != null && avg != null ? p - avg : 0
+            const w = `${(Math.abs(dev) / maxDev) * 50}%`
+            return (
+              <tr key={s.idx} ref={i === hl ? hlRef : undefined} className={`border-b border-border ${i === hl ? 'bg-panel text-neutral-100' : ''}`}>
+                <td className="py-1 pr-2 text-neutral-400">
+                  {i + 1}
+                  {s.distance_m != null && s.distance_m < 950 && <span className="text-xs text-neutral-500"> ({(s.distance_m / 1000).toFixed(2)})</span>}
+                </td>
+                <td className="pr-2 text-right">{formatPace(p).replace(' /km', '')}</td>
+                <td>
+                  {/* bar from the centre (median); right = faster */}
+                  <div className="relative h-2" title={p != null && avg != null ? sign(dev, `${Math.round(Math.abs(dev))} s/km vs median`) : undefined}>
+                    <div className="absolute inset-y-0 left-1/2 w-px bg-border" />
+                    <div className="absolute inset-y-0 bg-pace" style={dev <= 0 ? { left: '50%', width: w } : { right: '50%', width: w, opacity: 0.5 }} />
+                  </div>
+                </td>
+                <td className="pr-2 text-right">{s.avg_hr != null ? Math.round(s.avg_hr) : '—'}</td>
+                <td className="text-right">{s.elev_gain_m != null ? Math.round(s.elev_gain_m) : '—'}</td>
+              </tr>
+            )
+          })}
+        </tbody>
+      </table>
+    </div>
+  )
+}
+
+function Zones({ secs }: { secs: number[] }) {
+  const total = secs.reduce((a, b) => a + b, 0)
+  if (!total) return null
+  return (
+    <Section title="Time in HR zones">
+      <div className="flex h-4 w-full overflow-hidden rounded-sm">
+        {secs.map((s, i) => (
+          <div key={i} style={{ width: `${(s / total) * 100}%`, background: ZONE_COLORS[i] }} title={`Z${i + 1}`} />
+        ))}
+      </div>
+      <div className={`grid grid-cols-5 gap-2 text-xs ${mono}`}>
+        {secs.map((s, i) => (
+          <div key={i}>
+            <span className="text-neutral-400">Z{i + 1}</span> {clock(s)} <span className="text-neutral-500">{Math.round((s / total) * 100)}%</span>
+          </div>
+        ))}
+      </div>
+    </Section>
+  )
+}
+
+function Editor({ notes: n0, tags: t0, save }: { notes: string; tags: string[]; save: (b: Record<string, unknown>) => void }) {
+  const [notes, setNotes] = useState(n0)
+  const [tags, setTags] = useState(t0.join(', '))
+  const parse = (s: string) => s.split(',').map((x) => x.trim()).filter(Boolean)
+  const saveTags = () => {
+    if (parse(tags).join(',') !== t0.join(',')) save({ tags: parse(tags) })
+  }
+  return (
+    <Section title="Notes & tags">
+      <textarea
+        aria-label="Notes"
+        rows={3}
+        className={`${field} w-full`}
+        value={notes}
+        onChange={(e) => setNotes(e.target.value)}
+        onBlur={() => notes !== n0 && save({ notes: notes || null })}
+      />
+      <input
+        aria-label="Tags"
+        placeholder="tags, comma separated"
+        className={`${field} w-full`}
+        value={tags}
+        onChange={(e) => setTags(e.target.value)}
+        onBlur={saveTags}
+        onKeyDown={(e) => e.key === 'Enter' && saveTags()}
+      />
+    </Section>
+  )
+}
+
+// --- map --------------------------------------------------------------------
+function TrackMap({ st, colorBy, cursor }: { st: Streams; colorBy: 'pace' | 'hr'; cursor: RefObject<((i: number | null) => void) | null> }) {
+  const el = useRef<HTMLDivElement>(null)
+  const map = useRef<MlMap | null>(null)
+
+  const data = useMemo(() => {
+    const lat = st.lat!
+    const lng = st.lng!
+    const pace = (st.speed ?? []).map((v) => (v ? Math.min(1000 / v, PACE_CLAMP) : null))
+    const hr = st.hr ?? []
+    const pt = (i: number) => (lat[i] != null && lng[i] != null ? [lng[i]!, lat[i]!] : null)
+    const feats: Feature[] = []
+    for (let i = 1; i < lat.length; i++) {
+      const p0 = pt(i - 1)
+      const p1 = pt(i)
+      if (p0 && p1) feats.push({ type: 'Feature', properties: { pace: pace[i], hr: hr[i] }, geometry: { type: 'LineString', coordinates: [p0, p1] } })
+    }
+    const pts = lat.map((_, i) => pt(i)).filter((p): p is number[] => !!p)
+    const range = (xs: (number | null)[]) => {
+      const v = xs.filter((x): x is number => x != null)
+      return v.length ? [pct(v, 0.05), Math.max(pct(v, 0.95), pct(v, 0.05) + 1)] : [0, 1]
+    }
+    return {
+      track: { type: 'FeatureCollection', features: feats } as FeatureCollection,
+      ends: {
+        type: 'FeatureCollection',
+        features: [
+          { type: 'Feature', properties: { k: 'start' }, geometry: { type: 'Point', coordinates: pts[0] } },
+          { type: 'Feature', properties: { k: 'end' }, geometry: { type: 'Point', coordinates: pts[pts.length - 1] } },
+        ],
+      } as FeatureCollection,
+      pts,
+      ranges: { pace: range(pace), hr: range(hr) },
+    }
+  }, [st])
+
+  const color = useCallback(
+    (k: 'pace' | 'hr'): ExpressionSpecification => {
+      const [lo, hi] = data.ranges[k]
+      // pace: faster (lower) = brighter blue; HR: higher = brighter red
+      const [a, b] = k === 'pace' ? [C.pace, '#1e293b'] : ['#3f1d1d', C.hr]
+      return ['interpolate', ['linear'], ['coalesce', ['get', k], lo], lo, a, hi, b]
+    },
+    [data],
+  )
+
+  useEffect(() => {
+    const m = new MlMap({ container: el.current!, style: 'https://tiles.openfreemap.org/styles/dark', attributionControl: { compact: true } })
+    map.current = m
+    const marker = new Marker({ element: Object.assign(document.createElement('div'), { className: 'size-3 rounded-full border-2 border-neutral-100 bg-accent' }) })
+    const b = new LngLatBounds()
+    for (const p of data.pts) b.extend(p as [number, number])
+    m.fitBounds(b, { padding: 24, duration: 0 })
+    m.on('load', () => {
+      m.addSource('track', { type: 'geojson', data: data.track })
+      m.addLayer({ id: 'track', type: 'line', source: 'track', layout: { 'line-cap': 'round', 'line-join': 'round' }, paint: { 'line-width': 3, 'line-color': color(colorBy) } })
+      m.addSource('ends', { type: 'geojson', data: data.ends })
+      m.addLayer({
+        id: 'ends',
+        type: 'circle',
+        source: 'ends',
+        paint: {
+          'circle-radius': 5,
+          'circle-color': ['match', ['get', 'k'], 'start', '#e5e5e5', '#0a0a0c'],
+          'circle-stroke-color': '#e5e5e5',
+          'circle-stroke-width': 2,
+        },
+      })
+    })
+    cursor.current = (i) => {
+      const lat = i == null ? null : st.lat?.[i]
+      const lng = i == null ? null : st.lng?.[i]
+      if (lat == null || lng == null) marker.remove()
+      else marker.setLngLat([lng, lat]).addTo(m)
+    }
+    const ro = new ResizeObserver(() => m.resize())
+    ro.observe(el.current!)
+    return () => {
+      cursor.current = null
+      ro.disconnect()
+      m.remove()
+      map.current = null
+    }
+    // colorBy is applied by the effect below; re-creating the map on toggle is wasteful
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [data, st, cursor])
+
+  useEffect(() => {
+    const m = map.current
+    if (m?.getLayer('track')) m.setPaintProperty('track', 'line-color', color(colorBy))
+    else m?.once('load', () => m.setPaintProperty('track', 'line-color', color(colorBy)))
+  }, [colorBy, color])
+
+  // keep the source in sync if streams refetch without remount
+  useEffect(() => {
+    ;(map.current?.getSource('track') as GeoJSONSource | undefined)?.setData(data.track)
+  }, [data])
+
+  return <div ref={el} className="h-60 w-full border border-border xl:h-[420px]" />
+}
+
+// --- charts -----------------------------------------------------------------
+type Series = { mode: 'distance' | 'time'; x: number[]; pace: (number | null)[] }
+
+function Charts({ st, series, settings, onHover }: { st: Streams; series: Series; settings?: Settings; onHover: (v: number | null) => void }) {
+  const options = useMemo(() => {
+    const { x, mode } = series
+    const xFmt = (v: number) => (mode === 'distance' ? `${v.toFixed(2)} km` : clock(v))
+    const axisX = (v: number) => (mode === 'distance' ? `${+v.toFixed(1)}` : clock(v))
+    const mk = (name: string, y: (number | null)[], color: string, fmt: (v: number) => string, extra: { area?: boolean; inverse?: boolean; max?: number; bands?: [number, number, string][] } = {}): EChartsOption => ({
+      animation: false,
+      backgroundColor: 'transparent',
+      textStyle: { color: C.text, fontFamily: 'ui-monospace, monospace' },
+      title: { text: name, textStyle: { color: C.text, fontSize: 11, fontWeight: 'normal' }, left: 0, top: 0 },
+      grid: { left: 44, right: 8, top: 22, bottom: 22 },
+      tooltip: {
+        trigger: 'axis',
+        backgroundColor: '#121216',
+        borderColor: C.grid,
+        textStyle: { color: '#e5e5e5', fontFamily: 'ui-monospace, monospace', fontSize: 11 },
+        axisPointer: { type: 'line', lineStyle: { color: '#737373' } },
+        formatter: (ps) => {
+          const p = (Array.isArray(ps) ? ps[0] : ps) as unknown as { value: [number, number | null] }
+          return `${xFmt(p.value[0])}<br/>${name} ${p.value[1] == null ? '—' : fmt(p.value[1])}`
+        },
+      },
+      xAxis: { type: 'value', min: 'dataMin', max: 'dataMax', axisLabel: { formatter: axisX }, splitLine: { show: false }, axisLine: { lineStyle: { color: C.grid } } },
+      yAxis: { type: 'value', scale: true, inverse: extra.inverse, max: extra.max, splitLine: { lineStyle: { color: C.grid } }, axisLabel: { formatter: (v: number) => fmt(v) } },
+      dataZoom: [{ type: 'inside', throttle: 16 }],
+      series: [
+        {
+          type: 'line',
+          name,
+          data: x.map((v, i) => [v, y[i] ?? null]),
+          showSymbol: false,
+          sampling: 'lttb',
+          lineStyle: { color, width: 1.25 },
+          itemStyle: { color },
+          areaStyle: extra.area ? { color, opacity: 0.25 } : undefined,
+          markArea: extra.bands && {
+            silent: true,
+            data: extra.bands.map(([lo, hi, c]) => [{ yAxis: lo, itemStyle: { color: c, opacity: 0.15 } }, { yAxis: hi }]),
+          },
+        },
+      ],
+    })
+
+    const out: [string, EChartsOption][] = []
+    if (has(series.pace)) out.push(['pace', mk('Pace', series.pace, C.pace, (v) => formatPace(v).replace(' /km', ''), { inverse: true, max: PACE_CLAMP })])
+    if (has(st.hr)) {
+      const z = settings?.hr_zones
+      const hrs = st.hr!.filter((v): v is number => v != null)
+      const lo = Math.min(...hrs)
+      const hi = Math.max(settings?.hr_max ?? 0, ...hrs)
+      const edges = z?.length === 4 ? [lo, ...z, hi] : null
+      const bands = edges?.slice(0, 5).map((e, i): [number, number, string] => [e, edges[i + 1], ZONE_COLORS[i]]).filter(([a, b]) => b > a)
+      out.push(['hr', mk('HR', st.hr!, C.hr, (v) => `${Math.round(v)}`, { bands })])
+    }
+    if (has(st.altitude)) out.push(['elev', mk('Elevation', st.altitude!, C.elev, (v) => `${Math.round(v)} m`, { area: true })])
+    if (has(st.cadence)) out.push(['cad', mk('Cadence', st.cadence!, C.cad, (v) => `${Math.round(v)}`)])
+    if (has(st.power)) out.push(['pow', mk('Power', st.power!, C.pow, (v) => `${Math.round(v)} W`)])
+    return out
+  }, [st, series, settings])
+
+  useEffect(() => {
+    echarts.connect(GROUP)
+    return () => echarts.disconnect(GROUP)
+  }, [])
+
+  return (
+    <div className="grid gap-4 xl:grid-cols-2">
+      {options.map(([k, o]) => (
+        <Chart key={k} option={o} onHover={onHover} />
+      ))}
+    </div>
+  )
+}
+
+function Chart({ option, onHover }: { option: EChartsOption; onHover: (v: number | null) => void }) {
+  const el = useRef<HTMLDivElement>(null)
+  const inst = useRef<echarts.ECharts | null>(null)
+
+  useEffect(() => {
+    const c = echarts.init(el.current!)
+    c.group = GROUP
+    echarts.connect(GROUP)
+    inst.current = c
+    const ro = new ResizeObserver(() => c.resize())
+    ro.observe(el.current!)
+    return () => {
+      ro.disconnect()
+      c.dispose()
+      inst.current = null
+    }
+  }, [])
+
+  useEffect(() => {
+    inst.current?.setOption(option, true)
+  }, [option])
+
+  useEffect(() => {
+    const c = inst.current
+    if (!c) return
+    const h = (e: unknown) => {
+      const v = (e as { axesInfo?: { value: number }[] }).axesInfo?.[0]?.value
+      onHover(typeof v === 'number' ? v : null)
+    }
+    const out = () => onHover(null)
+    c.on('updateAxisPointer', h)
+    c.getZr().on('globalout', out)
+    return () => {
+      c.off('updateAxisPointer', h)
+      c.getZr().off('globalout', out)
+    }
+  }, [onHover])
+
+  return <div ref={el} className="h-48 w-full" />
+}
