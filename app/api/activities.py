@@ -23,6 +23,7 @@ from app.domain.models import (
     Tag,
 )
 from app.domain.stream_codec import decode_stream
+from app.metrics.engine import heat_slowdown_pct
 
 router = APIRouter(prefix="/api")
 Db = Annotated[Session, Depends(get_session)]
@@ -86,6 +87,8 @@ class ActivityOut(ActivitySummary):
     primary_source_id: int | None
     stream_source_id: int | None
     summary_polyline: str | None
+    weather_temp_c: float | None
+    weather_dew_point_c: float | None
     upstream_deleted_at: str | None
     created_at: str
     updated_at: str
@@ -115,6 +118,9 @@ class MetricsOut(_Out):
     decoupling_pct: float | None
     trimp: float | None
     gps_suspect: bool | None
+    gap_speed_ms: float | None
+    hr_at_ref_pace: float | None
+    ef_adjusted: float | None
 
 
 class LapOut(_Out):
@@ -128,6 +134,7 @@ class LapOut(_Out):
     max_hr: float | None
     avg_cadence_spm: float | None
     elev_gain_m: float | None
+    gap_speed_ms: float | None = None
 
 
 class BestEffortOut(_Out):
@@ -156,6 +163,7 @@ class ActivityDetail(BaseModel):
     sources: list[SourceOut]
     tags: list[str]
     duplicate_candidates: list[ActivitySummary]
+    heat_slowdown_pct: float | None  # model: expected pace cost of the weather, %
 
 
 class SimilarRun(ActivitySummary):
@@ -375,6 +383,9 @@ def get_activity(aid: int, s: Db) -> ActivityDetail:
         sources=sources,
         tags=full.tags,
         duplicate_candidates=_out(s, ActivitySummary, dups),
+        heat_slowdown_pct=heat_slowdown_pct(act.weather_temp_c, act.weather_dew_point_c)
+        if act.weather_temp_c is not None
+        else None,
     )
 
 

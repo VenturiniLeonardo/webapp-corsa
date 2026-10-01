@@ -1,12 +1,19 @@
 import pytest
 
 from app.metrics.engine import (
+    compute_adjusted_ef,
     compute_best_efforts,
     compute_efficiency_factor,
+    compute_gap_distance,
+    compute_grades,
+    compute_hr_at_pace,
     compute_km_splits,
+    compute_split_gap_speeds,
     compute_steady_run,
     compute_time_in_zones,
     detect_gps_suspect,
+    heat_slowdown_pct,
+    minetti_factor,
 )
 
 
@@ -176,3 +183,58 @@ def test_scale_distance_stream_stretches_to_summary_only_when_longer() -> None:
     assert scale_distance_stream([0, 100, 200], 400) == [0, 100, 200]  # broken stream
     assert scale_distance_stream([0, 10, 20], 15) == [0, 10, 20]
     assert scale_distance_stream([0, 10, 20], None) == [0, 10, 20]
+
+
+# --- GAP / reference-pace HR / heat (model) -------------------------------------------
+def test_gap_flat_equals_distance_and_uphill_is_longer() -> None:
+    d = [i * 10.0 for i in range(101)]
+    flat = compute_gap_distance(d, compute_grades(d, [5.0] * 101))
+    assert flat[-1] == pytest.approx(1000.0)
+    up = compute_gap_distance(d, compute_grades(d, [x * 0.05 for x in d]))  # 5% climb
+    assert up[-1] - up[0] == pytest.approx(1000.0 * minetti_factor(0.05), rel=1e-6)
+    assert minetti_factor(0.05) > 1 > minetti_factor(-0.05)
+
+
+def test_grades_need_altitude_and_clamp() -> None:
+    d = [i * 10.0 for i in range(11)]
+    assert compute_grades(d, [None] * 11) == [None] * 11
+    assert max(g for g in compute_grades(d, [x * 2 for x in d]) if g is not None) == 0.45
+
+
+def test_split_gap_speeds() -> None:
+    d = [i * 10.0 for i in range(201)]
+    t = [float(i * 3) for i in range(201)]
+    gap = compute_gap_distance(d, compute_grades(d, [0.0] * 201))
+    splits = compute_km_splits(d, t)
+    assert compute_split_gap_speeds(d, gap, splits) == pytest.approx([10 / 3, 10 / 3])
+
+
+def test_hr_at_pace_fits_hr_against_speed() -> None:
+    n = 1800  # 30 min at 1 Hz, speed alternating 2.5 / 3.5 m/s every 5 min, HR = 100 + 20 v
+    t = [float(i) for i in range(n)]
+    v = [2.5 if (i // 300) % 2 else 3.5 for i in range(n)]
+    d = [0.0]
+    for x in v[:-1]:
+        d.append(d[-1] + x)
+    hr = [100 + 20 * x for x in v]
+    hr[:300] = [90.0] * 300  # warm-up is ignored
+    # the 60 s window blends speeds at the switches, HR does not: allow a little slack
+    assert compute_hr_at_pace(t, d, hr, None, 330) == pytest.approx(100 + 20 * 1000 / 330, abs=1)
+    assert (
+        compute_hr_at_pace(t, d, hr, None, 240) is None
+    )  # 4:00 is outside the run: no extrapolation
+    assert compute_hr_at_pace(t, d, hr, [0.05] * n, 330) is None  # not flat
+    assert compute_hr_at_pace(t, d, [150.0] * n, None, 330) is None  # flat HR: slope 0
+
+
+def test_heat_slowdown_and_adjusted_ef() -> None:
+    assert heat_slowdown_pct(10, 0) == 0  # 50 + 32 °F
+    assert heat_slowdown_pct(None, 20) == 0
+    assert heat_slowdown_pct(30, 22) == pytest.approx(4.5 + (157.6 - 150) * 0.15)  # 86 + 71.6 °F
+    assert compute_adjusted_ef(3.0, 150, None, None) == pytest.approx(1.2)
+    assert compute_adjusted_ef(3.0, 150, 30, 22) > 1.2
+
+
+def test_grades_survive_non_monotonic_distance() -> None:
+    d = [0.0, 10.0, 20.0, 30.0, 5.0]  # glitch: distance drops at the end
+    assert len(compute_grades(d, [0.0] * 5)) == 5

@@ -4,8 +4,13 @@ import signal
 import threading
 import time
 
+from sqlalchemy import select
+from sqlalchemy.orm import Session
+
 from app.core.config import get_settings
 from app.core.db import make_engine
+from app.domain.models import ActivityMetrics
+from app.metrics.engine import ALGO_VERSION
 from app.worker.queue import JobQueue
 from app.worker.runner import Runner
 
@@ -20,6 +25,14 @@ def main() -> None:
     stop = threading.Event()
     for sig in (signal.SIGINT, signal.SIGTERM):
         signal.signal(sig, lambda *_: stop.set())
+
+    with Session(engine) as s:  # metrics code changed since the last run: recompute everything
+        if s.scalar(
+            select(ActivityMetrics.activity_id)
+            .where(ActivityMetrics.algo_version < ALGO_VERSION)
+            .limit(1)
+        ):
+            queue.enqueue("recompute", {})
 
     next_pull = 0.0
     while not stop.is_set():

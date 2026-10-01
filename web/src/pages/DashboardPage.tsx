@@ -44,6 +44,13 @@ type Fitness = {
   acwr: number | null
   monotony: number | null
   strain: number | null
+  ramp_pct: number | null
+  alerts: { level: 'info' | 'warn' | 'high'; code: string; message: string }[]
+}
+type CadenceBands = {
+  n: number
+  bands: { lo: number | null; hi: number | null; n: number; median_spm: number | null; trend: { slope_per_day: number } | null }[]
+  points: { activity_id: number; date: string; pace_s_per_km: number; cadence_spm: number; band: number }[]
 }
 
 type Gran = 'week' | 'month'
@@ -116,8 +123,12 @@ export default function DashboardPage() {
   const sumFrom = from ?? monthly.data?.items[0]?.start
   const summary = useQuery(q<Summary>('/api/stats/summary', sumFrom ? { from_date: sumFrom } : {}, !!sumFrom))
   const pace = useQuery(q<Trends>('/api/stats/trends', { metric: 'pace' }))
+  const gap = useQuery(q<Trends>('/api/stats/trends', { metric: 'gap' }))
   const ef = useQuery(q<Trends>('/api/stats/trends', { metric: 'ef' }))
-  const cadence = useQuery(q<Trends>('/api/stats/trends', { metric: 'cadence' }))
+  const efAdj = useQuery(q<Trends>('/api/stats/trends', { metric: 'ef_adj' }))
+  const hrRef = useQuery(q<Trends>('/api/stats/trends', { metric: 'hr_ref' }))
+  const cadence = useQuery(q<CadenceBands>('/api/stats/cadence-bands'))
+  const settings = useQuery({ queryKey: ['settings'], queryFn: () => api<{ ref_pace_s_per_km: number | null }>('/api/settings') })
   const paceHr = useQuery(q<PaceHr>('/api/stats/pace-hr'))
   const zones = useQuery(q<Zones>('/api/stats/zones', { bucket: 'week' }))
   const dist = useQuery(q<Dist>('/api/stats/distribution', { field: 'distance' }))
@@ -164,11 +175,13 @@ export default function DashboardPage() {
       </section>
       <Consistency from={from} to={to} />
 
+      <Alerts data={fitness.data} />
       <FitnessIndices data={fitness.data} />
       <Group title="Fitness">
-        <PaceChart data={pace.data} />
+        <PaceChart data={pace.data} gap={gap.data} />
+        <EfChart data={ef.data} adj={efAdj.data} />
+        <HrRefChart data={hrRef.data} refPace={settings.data?.ref_pace_s_per_km ?? 420} />
         <CadenceChart data={cadence.data} />
-        <EfChart data={ef.data} />
         <PaceHrChart data={paceHr.data} />
       </Group>
 
@@ -567,6 +580,23 @@ function Consistency({ from, to }: { from?: string; to?: string }) {
   )
 }
 
+// --- injury-risk alerts ------------------------------------------------------------
+const ALERT_STYLE = { high: 'border-red-500/50 text-red-300', warn: 'border-amber-500/50 text-amber-300', info: 'border-[#3a414b] text-[#aab2bd]' }
+
+function Alerts({ data }: { data?: Fitness }) {
+  if (!data?.alerts.length) return null
+  return (
+    <section role="status" className="space-y-2">
+      {data.alerts.map((a) => (
+        <p key={a.code} className={`rounded-[14px] border px-4 py-3 text-sm ${ALERT_STYLE[a.level]}`} style={{ background: SURF }}>
+          <b className="mr-2 text-[11px] tracking-[.07em] uppercase" style={{ fontFamily: FM }}>{a.level === 'info' ? 'Nota' : 'Rischio'}</b>
+          {a.message}
+        </p>
+      ))}
+    </section>
+  )
+}
+
 // --- fitness indices -------------------------------------------------------------
 function FitnessIndices({ data }: { data?: Fitness }) {
   if (!data) return <div className="h-[200px] animate-pulse rounded-[14px]" style={{ background: SURF }} />
@@ -665,7 +695,9 @@ function trendSeries(t: Trends, color: string, fmt: (v: number) => string, clamp
   ]
 }
 
-function PaceChart({ data }: { data?: Trends }) {
+function PaceChart({ data: raw, gap }: { data?: Trends; gap?: Trends }) {
+  const [mode, setMode] = useState<'Passo' | 'GAP'>('Passo')
+  const data = mode === 'GAP' ? gap : raw
   const option: EChartsOption | null = data?.n
     ? {
         ...base,
@@ -679,34 +711,62 @@ function PaceChart({ data }: { data?: Trends }) {
     <Card
       title="Pace"
       n={data?.n}
-      help="Steady runs only (outdoor, ≥ 20 min, with HR, low pace variability, not workout/race). Line = median of steady runs in the trailing 28 days. Axis inverted: faster is higher; clamped at 10:00/km."
+      aside={<Toggle value={mode} options={['Passo', 'GAP'] as const} onChange={setMode} />}
+      help="Steady runs only (outdoor, ≥ 20 min, with HR, low pace variability, not workout/race). Line = median of steady runs in the trailing 28 days. Axis inverted: faster is higher; clamped at 10:00/km. GAP (model) = grade-adjusted pace: each stretch weighted by the Minetti energy cost of its slope, so hilly runs compare with flat ones."
     >
       {option ? <Chart option={option} /> : <Empty what="steady runs" />}
     </Card>
   )
 }
 
-function CadenceChart({ data }: { data?: Trends }) {
-  const option: EChartsOption | null = data?.n
-    ? {
-        ...base,
-        tooltip: { ...base.tooltip, trigger: 'item' },
-        xAxis: { type: 'time', axisLine, splitLine: { show: false } },
-        yAxis: { type: 'value', scale: true, splitLine },
-        series: trendSeries(data, C.cad, (x) => `${Math.round(x)} spm`),
-      }
-    : null
+const CAD_RAMP = ['#f3e8ff', '#e9d5ff', '#d8b4fe', '#c084fc', '#a855f7', '#9333ea', '#7e22ce', '#581c87'] // fast → slow, one per band
+const bandName = (b: { lo: number | null; hi: number | null }) => (b.lo == null ? `<${mmss(b.hi!)}` : b.hi == null ? `>${mmss(b.lo)}` : `${mmss(b.lo)}–${mmss(b.hi)}`)
+
+function CadenceChart({ data }: { data?: CadenceBands }) {
+  const used = (data?.bands ?? []).map((b, i) => ({ ...b, i })).filter((b) => b.n)
+  const option: EChartsOption = {
+    ...base,
+    tooltip: { ...base.tooltip, trigger: 'item', formatter: (p) => { const [d, c, pace] = (p as unknown as { value: [string, number, number] }).value; return `${d}<br/>${Math.round(c)} spm · ${formatPace(pace)}` } },
+    xAxis: { type: 'time', axisLine, splitLine: { show: false } },
+    yAxis: { type: 'value', scale: true, splitLine },
+    series: used.map((b) => ({
+      name: bandName(b),
+      type: 'scatter',
+      symbolSize: 6,
+      itemStyle: { color: CAD_RAMP[b.i] },
+      data: data!.points.filter((p) => p.band === b.i).map((p) => [p.date, p.cadence_spm, p.pace_s_per_km]),
+    })),
+  }
   return (
-    <Card title="Cadence" n={data?.n} help="Average steps/min of steady runs (Apple Watch). Line = median of the trailing 28 days.">
-      {option ? <Chart option={option} /> : <Empty what="steady runs with cadence" />}
+    <Card title="Cadence by pace" n={data?.n} help="PLAN D12. Cadence rises with speed, so it is compared only within the same pace band (steady runs, avg cadence and pace of the run). Trend = Theil-Sen slope per band, shown with n ≥ 8.">
+      {used.length ? (
+        <>
+          <Chart option={option} className="h-44" />
+          <table className={`mt-2 w-full text-xs ${mono}`}>
+            <tbody>
+              {used.map((b) => (
+                <tr key={b.i} className="border-t border-border text-neutral-300">
+                  <td className="py-1"><span className="mr-1.5 inline-block h-2 w-2 rounded-full" style={{ background: CAD_RAMP[b.i] }} />{bandName(b)}</td>
+                  <td className="text-right text-neutral-500">n={b.n}</td>
+                  <td className="text-right">{b.median_spm != null ? `${Math.round(b.median_spm)} spm` : '—'}</td>
+                  <td className="text-right text-neutral-400">{b.trend ? `${b.trend.slope_per_day >= 0 ? '+' : '−'}${Math.abs(b.trend.slope_per_day * 30).toFixed(1)} /mese` : '—'}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </>
+      ) : (
+        <Empty what="steady runs with cadence" />
+      )}
     </Card>
   )
 }
 
-function EfChart({ data }: { data?: Trends }) {
+/** Scatter + rolling median + dashed Theil-Sen line; label = change over the span. */
+function fitted(data: Trends | undefined, color: string, fmt: (v: number) => string, delta: (change: number, base: number) => string, what: string) {
   const n = data?.n ?? 0
   let label: string | null = null
-  const series = data && n ? [...(trendSeries(data, C.hr, (x) => x.toFixed(3)) as object[])] : []
+  const series = data && n ? [...(trendSeries(data, color, fmt) as object[])] : []
   if (data && n) {
     if (data.trend) {
       const { slope_per_day: k, span_days: span } = data.trend
@@ -714,8 +774,7 @@ function EfChart({ data }: { data?: Trends }) {
       const fit = data.points.slice(-500)
       const x0 = t(fit[0].date)
       const b = median(fit.map((p) => p.value - k * (t(p.date) - x0)))
-      const pct = (k * span * 100) / b
-      label = `${pct < 0 ? '−' : '+'}${Math.abs(pct).toFixed(1)}% in ${Math.max(1, Math.round(span / 7))} weeks`
+      label = `${delta(k * span, b)} in ${Math.max(1, Math.round(span / 7))} weeks`
       series.push({
         name: 'Theil-Sen',
         type: 'line',
@@ -725,23 +784,55 @@ function EfChart({ data }: { data?: Trends }) {
         data: [[fit[0].date, b], [fit[fit.length - 1].date, b + k * span]],
         tooltip: { show: false },
       })
-    } else label = `trend needs ≥ ${MIN_TREND_N} steady runs`
+    } else label = `trend needs ≥ ${MIN_TREND_N} ${what}`
   }
+  return { label, series: series as EChartsOption['series'] }
+}
+const signed = (x: number, s: string) => `${x < 0 ? '−' : '+'}${s}`
+
+function EfChart({ data: raw, adj }: { data?: Trends; adj?: Trends }) {
+  const [mode, setMode] = useState<'EF' | 'Corretto'>('EF')
+  const data = mode === 'Corretto' ? adj : raw
+  const n = data?.n ?? 0
+  const { label, series } = fitted(data, C.hr, (x) => x.toFixed(3), (c, b) => signed(c, `${Math.abs((c * 100) / b).toFixed(1)}%`), 'steady runs')
   const option: EChartsOption = {
     ...base,
     tooltip: { ...base.tooltip, trigger: 'item' },
     xAxis: { type: 'time', axisLine, splitLine: { show: false } },
     yAxis: { type: 'value', scale: true, splitLine, axisLabel: { formatter: (v: number) => v.toFixed(2) } },
-    series: series as EChartsOption['series'],
+    series,
   }
   return (
     <Card
       title="Aerobic efficiency"
       n={data?.n}
       extra={label}
-      help="EF = moving speed (m/min) / avg HR, steady runs only; higher = faster per heartbeat. Line = trailing 28-day median. Dashed = Theil-Sen slope (median of pairwise slopes), hidden when n < 8. Heat and humidity raise HR."
+      aside={<Toggle value={mode} options={['EF', 'Corretto'] as const} onChange={setMode} />}
+      help="EF = moving speed (m/min) / avg HR, steady runs only; higher = faster per heartbeat. Line = trailing 28-day median. Dashed = Theil-Sen slope (median of pairwise slopes), hidden when n < 8. Corretto (model) = EF on grade-adjusted speed, raised by the expected heat slowdown (Hadley: temperature + dew point, °F) when weather is enabled in Settings."
     >
       {n ? <Chart option={option} /> : <Empty what="steady runs" />}
+    </Card>
+  )
+}
+
+function HrRefChart({ data, refPace }: { data?: Trends; refPace: number }) {
+  const n = data?.n ?? 0
+  const { label, series } = fitted(data, C.hr, (x) => `${Math.round(x)} bpm`, (c) => signed(c, `${Math.abs(c).toFixed(1)} bpm`), 'runs')
+  const option: EChartsOption = {
+    ...base,
+    tooltip: { ...base.tooltip, trigger: 'item' },
+    xAxis: { type: 'time', axisLine, splitLine: { show: false } },
+    yAxis: { type: 'value', scale: true, splitLine },
+    series,
+  }
+  return (
+    <Card
+      title={`HR at ${mmss(refPace)}/km`}
+      n={data?.n}
+      extra={label}
+      help={`Model: per run, a least-squares line HR ~ speed on flat samples (|grade| ≤ 2%, pace over 60 s windows, first 5 min dropped), read at ${mmss(refPace)}/km. Only runs whose own pace range (10th–90th percentile) covers that pace and with ≥ 10 min of samples: no extrapolation. All outdoor runs, not only steady ones. Lower = fitter. Reference pace is set in Settings.`}
+    >
+      {n ? <Chart option={option} /> : <Empty what="runs at that pace" />}
     </Card>
   )
 }

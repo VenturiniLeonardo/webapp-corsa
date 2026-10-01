@@ -8,10 +8,17 @@ type Settings = {
   hr_rest: number | null
   hr_zones: number[] | null
   steady_cv_threshold: number | null
+  ref_pace_s_per_km: number | null
+  weather_enabled: boolean | null
 }
 
 const field = 'rounded-lg border border-[#262b33] bg-[#111418] px-2.5 py-1 text-sm font-mono tabular-nums text-[#eef1f4]'
 const n = (v: string) => (v.trim() === '' ? null : Number(v))
+const mmss = (s: number) => `${Math.floor(s / 60)}:${String(s % 60).padStart(2, '0')}`
+const parsePace = (v: string) => {
+  const m = /^(\d{1,2}):([0-5]\d)$/.exec(v.trim())
+  return m ? Number(m[1]) * 60 + Number(m[2]) : null
+}
 
 export default function SettingsPage() {
   const qc = useQueryClient()
@@ -20,6 +27,8 @@ export default function SettingsPage() {
   const [hrRest, setHrRest] = useState('')
   const [zones, setZones] = useState(['', '', '', ''])
   const [cv, setCv] = useState(0.08)
+  const [refPace, setRefPace] = useState('7:00')
+  const [weather, setWeather] = useState(false)
   const [toast, setToast] = useState('')
 
   useEffect(() => {
@@ -29,6 +38,8 @@ export default function SettingsPage() {
     setHrRest(d.hr_rest?.toString() ?? '')
     setZones([0, 1, 2, 3].map((i) => d.hr_zones?.[i]?.toString() ?? ''))
     setCv(d.steady_cv_threshold ?? 0.08)
+    setRefPace(mmss(d.ref_pace_s_per_km ?? 420))
+    setWeather(!!d.weather_enabled)
   }, [q.data])
 
   const z = zones.map(n)
@@ -42,13 +53,15 @@ export default function SettingsPage() {
   const max = n(hrMax)
   const rest = n(hrRest)
   const hrErr = max !== null && rest !== null && rest >= max ? 'Resting HR must be below max HR' : ''
-  const err = zoneErr || hrErr
+  const ref = parsePace(refPace)
+  const paceErr = ref == null || ref < 150 || ref > 600 ? 'Reference pace must be m:ss between 2:30 and 10:00' : ''
+  const err = zoneErr || hrErr || paceErr
 
   const save = useMutation({
     mutationFn: () =>
       api<{ recompute_job_id: number | null }>('/api/settings', {
         method: 'PUT',
-        body: JSON.stringify({ hr_max: max, hr_rest: rest, hr_zones: filled ? z : null, steady_cv_threshold: cv }),
+        body: JSON.stringify({ hr_max: max, hr_rest: rest, hr_zones: filled ? z : null, steady_cv_threshold: cv, ref_pace_s_per_km: ref, weather_enabled: weather }),
       }),
     onSuccess: (r) => {
       setToast(r.recompute_job_id ? 'Saved — recomputation queued' : 'Saved')
@@ -124,6 +137,20 @@ export default function SettingsPage() {
           className="w-full accent-[#4c8dff]"
           onChange={(e) => setCv(Number(e.target.value))}
         />
+      </Panel>
+
+      <Panel title="Analysis" className="space-y-3 text-sm">
+        <label className="block space-y-1">
+          <span className="block text-neutral-400">Reference pace for "HR at pace" (min/km)</span>
+          <input inputMode="numeric" placeholder="7:00" className={`${field} w-24`} value={refPace} onChange={(e) => setRefPace(e.target.value)} />
+        </label>
+        <label className="flex items-start gap-2">
+          <input type="checkbox" className="mt-1" checked={weather} onChange={(e) => setWeather(e.target.checked)} />
+          <span>
+            <span className="text-neutral-200">Historical weather (Open-Meteo)</span>
+            <span className="block text-xs text-neutral-500">Sends each run&apos;s start position rounded to ~1 km and its date to open-meteo.com. Used for the heat-corrected EF.</span>
+          </span>
+        </label>
       </Panel>
 
       <div className="flex items-center gap-3">

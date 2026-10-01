@@ -38,12 +38,19 @@ HIST: dict[str, tuple[Any, str, tuple[float, ...]]] = {
     "duration": (A.moving_s, "s", (1800, 2700, 3600, 5400, 7200)),
     "pace": (PACE, "s/km", (240, 270, 300, 330, 360, 390, 420)),
 }
+TrendMetric = Literal["pace", "gap", "ef", "ef_adj", "hr", "hr_ref", "cadence"]
 TREND_VALUE: dict[str, tuple[Any, str]] = {
     "pace": (PACE, "s/km"),
+    "gap": (1000.0 / func.nullif(ActivityMetrics.gap_speed_ms, 0), "s/km"),
     "ef": (ActivityMetrics.efficiency_factor, "(m/min)/bpm"),
+    "ef_adj": (ActivityMetrics.ef_adjusted, "(m/min)/bpm"),
     "hr": (A.avg_hr, "bpm"),
+    "hr_ref": (ActivityMetrics.hr_at_ref_pace, "bpm"),
     "cadence": (A.avg_cadence_spm, "spm"),
 }
+ALL_RUNS_METRICS = {"hr_ref"}  # already pace-normalised: no need to restrict to steady runs
+# cadence bands by pace, s/km: class i is [edge[i-1], edge[i])
+CADENCE_PACE_EDGES = (300.0, 330.0, 360.0, 390.0, 420.0, 450.0, 480.0)  # 5:00 .. 8:00
 AGG = (
     func.count(),
     func.sum(A.distance_m),
@@ -396,16 +403,15 @@ def zones(s: Db, sc: Sc, bucket: Bucket = "week") -> Zones:
     )
 
 
-def _steady(s: Db, sc: Scope, *cols: Any) -> list[Any]:
+def _steady(s: Db, sc: Scope, *cols: Any, steady: bool = True) -> list[Any]:
     """Steady runs (oldest first) as (local_date, id, *cols); NULL `cols` rows are dropped."""
+    w = [ActivityMetrics.is_steady.is_(True)] if steady else []
     return list(
         s.execute(
             select(A.local_date, A.id, *cols)
             .select_from(A)
             .join(ActivityMetrics, ActivityMetrics.activity_id == A.id)
-            .where(
-                *sc.where(), ActivityMetrics.is_steady.is_(True), *(c.is_not(None) for c in cols)
-            )
+            .where(*sc.where(), *w, *(c.is_not(None) for c in cols))
             .order_by(A.local_date, A.id)
         )
     )
@@ -423,10 +429,10 @@ def theil_sen(xs: list[float], ys: list[float]) -> float | None:
 
 
 @router.get("/stats/trends")
-def trends(s: Db, sc: Sc, metric: Literal["pace", "ef", "hr", "cadence"]) -> Trends:
-    """Steady runs only (PLAN §13.4): points, trailing 28-day median and Theil-Sen slope."""
+def trends(s: Db, sc: Sc, metric: TrendMetric) -> Trends:
+    """Steady runs only (PLAN §13.4; hr_ref: all runs): points, 28-day median, Theil-Sen slope."""
     col, unit = TREND_VALUE[metric]
-    rows = _steady(s, sc, col)
+    rows = _steady(s, sc, col, steady=metric not in ALL_RUNS_METRICS)
     days = [date.fromisoformat(d).toordinal() for d, _, _ in rows]
     vals = [float(v) for _, _, v in rows]
     points = []
@@ -441,12 +447,67 @@ def trends(s: Db, sc: Sc, metric: Literal["pace", "ef", "hr", "cadence"]) -> Tre
                 rolling_median=statistics.median(vals[lo:hi]),
             )
         )
-    fit = None
-    if len(rows) >= MIN_TREND_N:
-        xs, ys = days[-MAX_THEIL_SEN_N:], vals[-MAX_THEIL_SEN_N:]
-        if (slope := theil_sen([float(x) for x in xs], ys)) is not None:
-            fit = TrendFit(slope_per_day=slope, span_days=xs[-1] - xs[0])
-    return Trends(metric=metric, unit=unit, n=len(rows), points=points, trend=fit)
+    return Trends(metric=metric, unit=unit, n=len(rows), points=points, trend=_fit(days, vals))
+
+
+def _fit(days: list[int], vals: list[float]) -> TrendFit | None:
+    if len(days) < MIN_TREND_N:
+        return None
+    xs, ys = days[-MAX_THEIL_SEN_N:], vals[-MAX_THEIL_SEN_N:]
+    slope = theil_sen([float(x) for x in xs], ys)
+    return None if slope is None else TrendFit(slope_per_day=slope, span_days=xs[-1] - xs[0])
+
+
+class CadencePoint(BaseModel):
+    activity_id: int
+    date: date
+    pace_s_per_km: float
+    cadence_spm: float
+    band: int
+
+
+class CadenceBand(BaseModel):
+    lo: float | None  # s/km; None = open-ended
+    hi: float | None
+    n: int
+    median_spm: float | None
+    trend: TrendFit | None  # None when n < MIN_TREND_N
+
+
+class CadenceBands(BaseModel):
+    n: int
+    bands: list[CadenceBand]
+    points: list[CadencePoint]
+
+
+@router.get("/stats/cadence-bands")
+def cadence_bands(s: Db, sc: Sc) -> CadenceBands:
+    """PLAN D12: cadence rises with speed, so it is trended inside fixed pace bands (steady runs)."""
+    e = CADENCE_PACE_EDGES
+    pts = [
+        CadencePoint(
+            activity_id=aid,
+            date=date.fromisoformat(d),
+            pace_s_per_km=p,
+            cadence_spm=c,
+            band=bisect_right(e, p),
+        )
+        for d, aid, p, c in _steady(s, sc, PACE, A.avg_cadence_spm)
+    ]
+    bands = []
+    for i in range(len(e) + 1):
+        mine = [p for p in pts if p.band == i]
+        days, vals = [p.date.toordinal() for p in mine], [p.cadence_spm for p in mine]
+        bands.append(
+            CadenceBand(
+                lo=e[i - 1] if i else None,
+                hi=e[i] if i < len(e) else None,
+                n=len(mine),
+                median_spm=statistics.median(vals) if vals else None,
+                trend=_fit(days, vals),
+            )
+        )
+    return CadenceBands(n=len(pts), bands=bands, points=pts)
 
 
 @router.get("/stats/pace-hr")
@@ -491,6 +552,12 @@ class Prediction(BaseModel):
     seconds: int
 
 
+class Alert(BaseModel):
+    level: Literal["info", "warn", "high"]
+    code: Literal["ramp", "acwr_high", "acwr_low", "monotony"]
+    message: str  # Italian, shown as-is
+
+
 class Fitness(BaseModel):
     vo2max: Vo2
     predictions: list[Prediction]  # Riegel from the VDOT effort
@@ -500,11 +567,17 @@ class Fitness(BaseModel):
     acwr: float | None  # 7 d load / (28 d load / 4)
     monotony: float | None  # Foster: mean/sd of 7 daily loads
     strain: float | None  # weekly load * monotony
+    ramp_pct: float | None  # km last 7 d vs weekly mean of the 3 weeks before, %
+    alerts: list[Alert]
 
 
 VDOT_WINDOW_DAYS = 180
 PRED_TARGETS = {5000.0: "5K", 10000.0: "10K", 21097.5: "Half Marathon", 42195.0: "Marathon"}
 RIEGEL_K = 1.06
+RAMP_WARN, RAMP_HIGH = 15.0, 30.0  # % weekly km increase
+RAMP_MIN_BASE_KM = 5.0  # below this the previous weeks are too small for a ratio
+ACWR_WARN, ACWR_HIGH, ACWR_LOW = 1.3, 1.5, 0.8
+MONOTONY_WARN = 2.0
 
 
 def vdot(dist_m: float, secs: float) -> float:
@@ -513,6 +586,53 @@ def vdot(dist_m: float, secs: float) -> float:
     vo2 = -4.60 + 0.182258 * v + 0.000104 * v * v
     frac = 0.8 + 0.1894393 * math.exp(-0.012778 * t) + 0.2989558 * math.exp(-0.1932605 * t)
     return vo2 / frac
+
+
+def _ramp_pct(daily_km: dict[date, float], today: date) -> float | None:
+    last = sum(daily_km.get(today - timedelta(days=i), 0.0) for i in range(7))
+    base = sum(daily_km.get(today - timedelta(days=i), 0.0) for i in range(7, 28)) / 3
+    return (last / base - 1) * 100 if base >= RAMP_MIN_BASE_KM else None
+
+
+def _alerts(ix: dict[str, float | None], ramp: float | None) -> list[Alert]:
+    out: list[Alert] = []
+    if ramp is not None and ramp > RAMP_WARN:
+        out.append(
+            Alert(
+                level="high" if ramp > RAMP_HIGH else "warn",
+                code="ramp",
+                message=f"Km degli ultimi 7 giorni +{ramp:.0f}% rispetto alla media delle 3 "
+                "settimane precedenti: oltre il 10–15% il rischio di infortunio sale.",
+            )
+        )
+    if (a := ix["acwr"]) is not None:
+        if a > ACWR_WARN:
+            out.append(
+                Alert(
+                    level="high" if a > ACWR_HIGH else "warn",
+                    code="acwr_high",
+                    message=f"ACWR {a:.2f}: carico acuto alto rispetto a quello cronico "
+                    "(zona ottimale 0,8–1,3).",
+                )
+            )
+        elif a < ACWR_LOW:
+            out.append(
+                Alert(
+                    level="info",
+                    code="acwr_low",
+                    message=f"ACWR {a:.2f}: carico in calo, la forma cronica si sta riducendo.",
+                )
+            )
+    if (m := ix["monotony"]) is not None and m > MONOTONY_WARN:
+        out.append(
+            Alert(
+                level="warn",
+                code="monotony",
+                message=f"Monotonia {m:.1f}: carico troppo uniforme negli ultimi 7 giorni, "
+                "alterna giorni facili e duri.",
+            )
+        )
+    return out
 
 
 def _load_indices(daily: dict[date, float], today: date) -> dict[str, float | None]:
@@ -587,8 +707,9 @@ def fitness(s: Db, sc: Sc) -> Fitness:
                 est.append(0.2 * v / frac + 3.5)  # ACSM running VO2, Swain
 
     daily: dict[date, float] = defaultdict(float)
-    for d, zs, mv in s.execute(
-        select(A.local_date, ActivityMetrics.time_in_zones_s, A.moving_s)
+    daily_km: dict[date, float] = defaultdict(float)
+    for d, zs, mv, dist in s.execute(
+        select(A.local_date, ActivityMetrics.time_in_zones_s, A.moving_s, A.distance_m)
         .select_from(A)
         .join(ActivityMetrics, ActivityMetrics.activity_id == A.id)
         .where(*replace(base, from_date=today - timedelta(days=VDOT_WINDOW_DAYS)).where())
@@ -596,6 +717,7 @@ def fitness(s: Db, sc: Sc) -> Fitness:
         # Edwards TRIMP: minutes in zone k weighted k; no HR -> assume Z2 (ponytail: crude)
         load = sum((k + 1) * t / 60 for k, t in enumerate(zs)) if zs else 2 * (mv or 0) / 60
         daily[date.fromisoformat(d)] += load
+        daily_km[date.fromisoformat(d)] += (dist or 0) / 1000
 
     preds = []
     if best:
@@ -604,6 +726,7 @@ def fitness(s: Db, sc: Sc) -> Fitness:
             Prediction(label=lb, seconds=round(t1 * (d2 / d1) ** RIEGEL_K))
             for d2, lb in PRED_TARGETS.items()
         ]
+    ix, ramp = _load_indices(daily, today), _ramp_pct(daily_km, today)
     return Fitness(
         vo2max=Vo2(
             vdot=best[0] if best else None,
@@ -613,7 +736,9 @@ def fitness(s: Db, sc: Sc) -> Fitness:
             hr_based_n=len(est),
         ),
         predictions=preds,
-        **_load_indices(daily, today),
+        **ix,
+        ramp_pct=ramp,
+        alerts=_alerts(ix, ramp),
     )
 
 

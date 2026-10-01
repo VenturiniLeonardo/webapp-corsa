@@ -60,7 +60,8 @@ ACTIVITY_FIELDS = [
     "workout_type",
     "summary_polyline",
 ]
-Cfg = tuple[list[float] | None, float]
+Cfg = tuple[list[float] | None, float, float]  # zones, steady CV threshold, ref pace s/km
+DEFAULT_REF_PACE_S = 420.0  # 7:00/km
 
 
 def _now_iso(dt: datetime) -> str:
@@ -77,11 +78,15 @@ def _cfg(s: Session) -> Cfg:
     v: dict[str, Any] = dict(
         s.execute(
             select(Setting.key, Setting.value).where(
-                Setting.key.in_(("hr_zones", "steady_cv_threshold"))
+                Setting.key.in_(("hr_zones", "steady_cv_threshold", "ref_pace_s_per_km"))
             )
         ).all()
     )
-    return v.get("hr_zones") or None, float(v.get("steady_cv_threshold") or 0.08)
+    return (
+        v.get("hr_zones") or None,
+        float(v.get("steady_cv_threshold") or 0.08),
+        float(v.get("ref_pace_s_per_km") or DEFAULT_REF_PACE_S),
+    )
 
 
 def _record(s: Session, ext_id: str, source: str) -> SourceRecord:
@@ -97,14 +102,27 @@ def _record(s: Session, ext_id: str, source: str) -> SourceRecord:
     return rec
 
 
+def adjusted_ef(act: Activity, m: ActivityMetrics) -> float | None:
+    """EF on GAP (raw speed when there is no altitude) + heat; only where plain EF exists."""
+    if m.efficiency_factor is None:
+        return None
+    speed = m.gap_speed_ms or float(act.distance_m or 0) / (act.moving_s or 1)
+    return metrics.compute_adjusted_ef(
+        speed, act.avg_hr, act.weather_temp_c, act.weather_dew_point_c
+    )
+
+
 def _compute_metrics(s: Session, act: Activity, ch: dict[str, list[Any]], cfg: Cfg) -> None:
     """Derived rows for one activity; caller owns the transaction."""
-    zones, cv = cfg
+    zones, cv, ref_pace = cfg
     s.execute(delete(Lap).where(Lap.activity_id == act.id, Lap.kind == "split_km"))
     s.execute(delete(BestEffort).where(BestEffort.activity_id == act.id))
-    t, d, hr, speed = (ch.get(k) for k in ("time", "distance", "hr", "speed"))
+    t, d, hr, speed, alt = (ch.get(k) for k in ("time", "distance", "hr", "speed", "altitude"))
     if d:
         d = metrics.scale_distance_stream(d, act.distance_m)
+    # treadmill: no real grade, distance estimated -> no GAP (§8.3)
+    grades = metrics.compute_grades(d, alt) if d and alt and not act.is_indoor else None
+    gap_d = metrics.compute_gap_distance(d, grades) if d and grades else None
     m = ActivityMetrics(
         activity_id=act.id,
         algo_version=metrics.ALGO_VERSION,
@@ -112,6 +130,8 @@ def _compute_metrics(s: Session, act: Activity, ch: dict[str, list[Any]], cfg: C
         zones_hash=hashlib.sha1(json.dumps(zones).encode()).hexdigest()[:12] if zones else None,
     )
     if t and d:
+        splits = metrics.compute_km_splits(d, t, hr, alt)
+        gaps = metrics.compute_split_gap_speeds(d, gap_d, splits) if gap_d else [None] * len(splits)
         s.add_all(
             Lap(
                 activity_id=act.id,
@@ -123,8 +143,9 @@ def _compute_metrics(s: Session, act: Activity, ch: dict[str, list[Any]], cfg: C
                 avg_speed_ms=x.avg_speed_ms,
                 avg_hr=x.avg_hr,
                 elev_gain_m=x.elev_gain_m,
+                gap_speed_ms=g,
             )
-            for x in metrics.compute_km_splits(d, t, hr, ch.get("altitude"))
+            for x, g in zip(splits, gaps, strict=True)
         )
         if not act.is_indoor:  # treadmill distance is estimated: no best efforts / EF (§8.3)
             s.add_all(
@@ -148,6 +169,11 @@ def _compute_metrics(s: Session, act: Activity, ch: dict[str, list[Any]], cfg: C
             speed, t, bool(act.is_indoor), act.workout_type, cv
         )
         m.gps_suspect = metrics.detect_gps_suspect(speed, t)
+    if t and d and hr and not act.is_indoor:
+        m.hr_at_ref_pace = metrics.compute_hr_at_pace(t, d, hr, grades, ref_pace)
+    if d and gap_d and act.distance_m and act.moving_s and d[-1] > d[0]:
+        m.gap_speed_ms = act.distance_m / act.moving_s * (gap_d[-1] - gap_d[0]) / (d[-1] - d[0])
+    m.ef_adjusted = adjusted_ef(act, m)
     s.merge(m)
 
 
@@ -237,6 +263,7 @@ class Runner:
             "recompute": self.run_recompute_metrics,
             "ai_sweep": self.run_ai_sweep,
             "intervals_sync": self.run_intervals_sync,
+            "weather": self.run_weather,
         }
         try:
             self.queue.finish_job(job.id, "done", handlers[job.kind](job))
@@ -253,7 +280,15 @@ class Runner:
 
         err = intervals.sync(self.engine, lambda d, t: self.queue.progress(job.id, d, t))
         queue_auto_analysis(self.engine)
+        with Session(self.engine) as s:
+            if (w := s.get(Setting, "weather_enabled")) and w.value:
+                self.queue.enqueue("weather", {})
         return err
+
+    def run_weather(self, job: Job) -> str | None:
+        from app.ingest import weather  # weather -> runner (adjusted_ef) import cycle
+
+        return weather.fill_missing(self.engine, lambda d, t: self.queue.progress(job.id, d, t))
 
     def run_ai_sweep(self, job: Job) -> str | None:
         done = threading.Event()  # a model call can outlast STALE_AFTER: keep the heartbeat going

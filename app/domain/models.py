@@ -106,6 +106,9 @@ class Activity(Base):
         ForeignKey("source_records.id", use_alter=True, name="fk_activities_stream_source")
     )
     summary_polyline: Mapped[str | None] = mapped_column(Text)
+    # Open-Meteo at the run midpoint (opt-in, setting weather_enabled); not from the source
+    weather_temp_c: Mapped[float | None] = mapped_column(REAL)
+    weather_dew_point_c: Mapped[float | None] = mapped_column(REAL)
     duplicate_of_id: Mapped[int | None] = mapped_column(ForeignKey("activities.id"))
     upstream_deleted_at: Mapped[str | None] = mapped_column(Text)
     created_at: Mapped[str] = mapped_column(Text, default=utcnow_iso)
@@ -180,6 +183,7 @@ class Lap(Base):
     max_hr: Mapped[float | None] = mapped_column(REAL)
     avg_cadence_spm: Mapped[float | None] = mapped_column(REAL)
     elev_gain_m: Mapped[float | None] = mapped_column(REAL)
+    gap_speed_ms: Mapped[float | None] = mapped_column(REAL)  # grade-adjusted (model)
 
 
 class BestEffort(Base):
@@ -213,6 +217,9 @@ class ActivityMetrics(Base):
     decoupling_pct: Mapped[float | None] = mapped_column(REAL)
     trimp: Mapped[float | None] = mapped_column(REAL)
     gps_suspect: Mapped[bool | None] = mapped_column(Boolean)
+    gap_speed_ms: Mapped[float | None] = mapped_column(REAL)  # grade-adjusted (model)
+    hr_at_ref_pace: Mapped[float | None] = mapped_column(REAL)
+    ef_adjusted: Mapped[float | None] = mapped_column(REAL)  # GAP + heat (model)
 
 
 class Tag(Base):

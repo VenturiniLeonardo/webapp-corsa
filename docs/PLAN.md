@@ -529,6 +529,11 @@ Mobile: una colonna; mappa alta 240 px; statistiche in griglia 2×N compatta; gr
 - **Efficiency Factor (EF)** = velocità in movimento (m/min) / FC media. Più alto = più veloce a parità di battito.
 - **Corsa "steady"** (deterministica, non dipende dai tag): outdoor, ≥ 20 min, con FC, coefficiente di variazione del passo su finestre di 1 min < soglia (default 0,08, configurabile), `workout_type` diverso da workout/race. Serve a confrontare mele con mele.
 - **gps_suspect**: velocità > 7 m/s per più di 10 s oppure salti di posizione anomali.
+- **GAP** (`model`, 2026-10-01): passo corretto per la pendenza; pendenza su finestra centrata di 50 m, ogni tratto pesato con il costo energetico di Minetti (2002). Per attività e per split km. Non per treadmill.
+- **FC a passo di riferimento** (`model`, M7-04): per corsa, retta ai minimi quadrati FC ~ velocità sui campioni piani (|pendenza| ≤ 2%, passo su finestra di 60 s, primi 5 min esclusi), letta al passo impostato (default 7:00/km). Nessuna estrapolazione: il passo deve stare tra il 10° e il 90° percentile della corsa.
+- **EF corretto** (`model`): EF sulla velocità GAP, aumentato del rallentamento atteso per il caldo (tabella di Hadley su temperatura + punto di rugiada in °F). Meteo da Open-Meteo, opt-in (M8-05): invia coordinate di partenza arrotondate a ~1 km e data.
+- **Alert di rischio**: rampa km 7 gg vs media delle 3 settimane precedenti (> 15% warn, > 30% high), ACWR > 1,3 / > 1,5 / < 0,8, monotonia > 2.
+- **Cadenza per fascia di passo** (D12): fasce fisse di 30 s/km da 5:00 a 8:00, solo corse steady; mediana e Theil-Sen per fascia.
 
 ### 13.3 Visualizzazioni
 

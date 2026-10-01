@@ -36,6 +36,8 @@ type Activity = Summary & {
   avg_power_w: number | null
   calories_kcal: number | null
   excluded_from_stats: boolean
+  weather_temp_c: number | null
+  weather_dew_point_c: number | null
 }
 export type Lap = {
   idx: number
@@ -48,16 +50,18 @@ export type Lap = {
   avg_speed_ms: number | null
   avg_hr: number | null
   elev_gain_m: number | null
+  gap_speed_ms?: number | null
 }
 export type Detail = {
   activity: Activity
-  metrics: { efficiency_factor: number | null; time_in_zones_s: number[] | null; decoupling_pct: number | null; pace_cv: number | null; is_steady: boolean | null; trimp: number | null; gps_suspect: boolean | null } | null
+  metrics: { efficiency_factor: number | null; time_in_zones_s: number[] | null; decoupling_pct: number | null; pace_cv: number | null; is_steady: boolean | null; trimp: number | null; gps_suspect: boolean | null; gap_speed_ms: number | null; hr_at_ref_pace: number | null; ef_adjusted: number | null } | null
   laps: Lap[]
   splits: Lap[]
   best_efforts: { distance_m: number; elapsed_s: number; is_pr: boolean }[]
   sources: { id: number; source: string; external_id: string; status: string; fetched_at: string | null; mapper_version: number | null; is_primary: boolean }[]
   tags: string[]
   duplicate_candidates: Summary[]
+  heat_slowdown_pct: number | null
 }
 export type Similar = Summary & {
   pace_s_per_km: number | null
@@ -68,7 +72,7 @@ export type Similar = Summary & {
 }
 type Ch = 'time' | 'distance' | 'hr' | 'speed' | 'lat' | 'lng' | 'altitude' | 'cadence' | 'power'
 export type Streams = Partial<Record<Ch, (number | null)[]>>
-export type Settings = { hr_max: number | null; hr_zones: number[] | null }
+export type Settings = { hr_max: number | null; hr_zones: number[] | null; ref_pace_s_per_km?: number | null }
 type ColorBy = 'pace' | 'hr' | 'power' | 'elev'
 const COLOR_BY: [ColorBy, string, Ch][] = [['pace', 'Pace', 'speed'], ['hr', 'HR', 'hr'], ['power', 'Power', 'power'], ['elev', 'Elevation', 'altitude']]
 
@@ -203,6 +207,9 @@ export default function ActivityDetailPage() {
   const sim = similar.data ?? []
   const best1k = d.best_efforts.find((b) => b.distance_m === 1000)?.elapsed_s
   const alt = (st?.altitude ?? []).filter((x): x is number => x != null)
+  const m = d.metrics
+  const gap = m?.gap_speed_ms ? 1000 / m.gap_speed_ms : null
+  const refPace = settings.data?.ref_pace_s_per_km ?? 420
 
   const delta = (me: number | null, others: (number | null)[], fmt: (x: number) => string) => {
     const m = median(others)
@@ -286,16 +293,21 @@ export default function ActivityDetailPage() {
           <Stat label="Moving" value={a.moving_s != null ? formatDuration(a.moving_s) : '—'} delta={delta(a.moving_s, sim.map((s) => s.moving_s), formatDuration)} />
           <Stat label="Total" value={a.elapsed_s != null ? formatDuration(a.elapsed_s) : '—'} />
           <Stat label="Pace" value={formatPace(pace)} delta={delta(pace, sim.map((s) => s.pace_s_per_km), (x) => `${Math.round(x)} s/km`)} />
+          <Stat label="GAP" value={formatPace(gap)} model="Grade-adjusted pace: each stretch weighted by the Minetti energy cost of its slope (flat equivalent)" />
           <Stat label="Best 1 km" value={best1k != null ? formatPace(best1k) : '—'} />
         </Group>
         <Group title="Heart">
           <Stat label="Avg HR" value={a.avg_hr != null ? `${Math.round(a.avg_hr)} bpm` : '—'} delta={delta(a.avg_hr, sim.map((s) => s.avg_hr), (x) => `${Math.round(x)}`)} />
           <Stat label="Max HR" value={a.max_hr != null ? `${Math.round(a.max_hr)} bpm` : '—'} />
           <Stat label="EF" value={ef != null ? ef.toFixed(2) : '—'} delta={delta(ef, sim.map((s) => s.efficiency_factor), (x) => x.toFixed(2))} />
+          <Stat label="EF corretto" value={m?.ef_adjusted != null ? m.ef_adjusted.toFixed(2) : '—'} model="EF on grade-adjusted speed, raised by the expected heat slowdown" />
+          <Stat label={`HR @ ${clock(refPace)}`} value={m?.hr_at_ref_pace != null ? `${Math.round(m.hr_at_ref_pace)} bpm` : '—'} />
         </Group>
         <Group title="Terrain">
           <Stat label="D+ / D−" value={`${a.elev_gain_m != null ? Math.round(a.elev_gain_m) : '—'} / ${a.elev_loss_m != null ? Math.round(a.elev_loss_m) : '—'} m`} />
           <Stat label="Alt min / max" value={alt.length ? `${Math.round(Math.min(...alt))} / ${Math.round(Math.max(...alt))} m` : '—'} />
+          <Stat label="Temp / dew pt" value={a.weather_temp_c != null && a.weather_dew_point_c != null ? `${Math.round(a.weather_temp_c)} / ${Math.round(a.weather_dew_point_c)} °C` : '—'} est="Open-Meteo hourly at the run midpoint, not measured on the route" />
+          <Stat label="Heat cost" value={d.heat_slowdown_pct != null ? `+${d.heat_slowdown_pct.toFixed(1)}%` : '—'} model="Expected pace slowdown from temperature + dew point (Hadley table)" />
         </Group>
         <Group title="Other">
           <Stat label="Cadence" value={a.avg_cadence_spm != null ? `${Math.round(a.avg_cadence_spm)} spm` : '—'} />
@@ -472,7 +484,7 @@ function Group({ title, children }: { title: string; children: ReactNode }) {
   )
 }
 
-function Stat({ label, value, delta, est }: { label: string; value: string; delta?: string; est?: string }) {
+function Stat({ label, value, delta, est, model }: { label: string; value: string; delta?: string; est?: string; model?: string }) {
   return (
     <div className="flex items-baseline justify-between gap-2 text-sm">
       <dt className="text-neutral-400">
@@ -480,6 +492,11 @@ function Stat({ label, value, delta, est }: { label: string; value: string; delt
         {est && (
           <abbr title={est} className="ml-1 text-[10px] text-neutral-500 no-underline">
             est.
+          </abbr>
+        )}
+        {model && (
+          <abbr title={model} className="ml-1 text-[10px] text-neutral-500 no-underline">
+            model
           </abbr>
         )}
       </dt>
@@ -493,6 +510,7 @@ function Stat({ label, value, delta, est }: { label: string; value: string; delt
 
 function Splits({ splits, hl, bare }: { splits: Lap[]; hl: number | null; bare?: boolean }) {
   const paces = splits.map(lapPace)
+  const showGap = splits.some((s) => s.gap_speed_ms)
   const avg = median(paces)
   const maxDev = Math.max(1, ...paces.map((p) => (p != null && avg != null ? Math.abs(p - avg) : 0)))
   const hlRef = useRef<HTMLTableRowElement>(null)
@@ -507,6 +525,7 @@ function Splits({ splits, hl, bare }: { splits: Lap[]; hl: number | null; bare?:
           <tr>
             <th className="py-1 pr-2 font-normal">{bare ? 'Lap' : 'Km'}</th>
             <th className="pr-2 text-right font-normal">Pace</th>
+            {showGap && <th className="pr-2 text-right font-normal" title="Grade-adjusted pace (model)">GAP</th>}
             <th className="w-1/3 font-normal" />
             <th className="pr-2 text-right font-normal">HR</th>
             <th className="text-right font-normal">D+</th>
@@ -524,6 +543,7 @@ function Splits({ splits, hl, bare }: { splits: Lap[]; hl: number | null; bare?:
                   {s.distance_m != null && s.distance_m < 950 && <span className="text-xs text-neutral-500"> ({(s.distance_m / 1000).toFixed(2)})</span>}
                 </td>
                 <td className="pr-2 text-right">{formatPace(p).replace(' /km', '')}</td>
+                {showGap && <td className="pr-2 text-right text-neutral-400">{s.gap_speed_ms ? formatPace(1000 / s.gap_speed_ms).replace(' /km', '') : '—'}</td>}
                 <td>
                   {/* bar from the centre (median); right = faster */}
                   <div className="relative h-2" title={p != null && avg != null ? sign(dev, `${Math.round(Math.abs(dev))} s/km vs median`) : undefined}>

@@ -10,8 +10,15 @@ from app.domain.models import Setting
 from app.worker.queue import JobQueue
 
 router = APIRouter(prefix="/api")
-KEYS = ("hr_max", "hr_rest", "hr_zones", "steady_cv_threshold")
-RECOMPUTE_KEYS = {"hr_zones", "steady_cv_threshold"}  # the two inputs of the metrics cfg
+KEYS = (
+    "hr_max",
+    "hr_rest",
+    "hr_zones",
+    "steady_cv_threshold",
+    "ref_pace_s_per_km",
+    "weather_enabled",
+)
+RECOMPUTE_KEYS = {"hr_zones", "steady_cv_threshold", "ref_pace_s_per_km"}  # metrics cfg inputs
 
 
 class SettingsIn(BaseModel):
@@ -20,6 +27,8 @@ class SettingsIn(BaseModel):
     hr_rest: int | None = Field(None, ge=20, le=120)
     hr_zones: list[int] | None = Field(None, min_length=4, max_length=4)  # Z1-Z4 upper bounds
     steady_cv_threshold: float | None = Field(None, gt=0, le=1)
+    ref_pace_s_per_km: int | None = Field(None, ge=150, le=600)  # HR-at-reference-pace target
+    weather_enabled: bool | None = None  # opt-in: sends rounded coords + date to Open-Meteo
 
     @field_validator("hr_zones")
     @classmethod
@@ -49,7 +58,9 @@ def put_settings(body: SettingsIn, db: Db) -> dict[str, Any]:
             changed.add(k)
             db.merge(Setting(key=k, value=v))
     db.commit()
-    job_id = None
+    job_id, q = None, JobQueue(cast(Engine, db.get_bind()))
     if changed & RECOMPUTE_KEYS:
-        job_id = JobQueue(cast(Engine, db.get_bind())).enqueue("recompute", {})
+        job_id = q.enqueue("recompute", {})
+    if "weather_enabled" in changed and body.weather_enabled:
+        q.enqueue("weather", {})
     return {"settings": _read(db), "recompute_job_id": job_id}

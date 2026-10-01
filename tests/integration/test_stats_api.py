@@ -453,3 +453,57 @@ def test_fitness_endpoint(engine, client):
 def test_fitness_empty(client):
     f = get(client, "/api/stats/fitness")
     assert f["vo2max"]["vdot"] is None and f["ctl"] is None and f["predictions"] == []
+
+
+def test_fitness_alerts_ramp_and_acwr(engine, client):
+    with Session(engine) as s, s.begin():
+        for i in range(21):  # 3 base weeks: 2 km/day
+            a = add(s, f"{TODAY - timedelta(days=27 - i)}T06:00:00+00:00", 2000, 720)
+            metrics(s, a, time_in_zones_s=[720, 0, 0, 0, 0])
+        for i in range(7):  # last week: 4 km/day
+            a = add(s, f"{TODAY - timedelta(days=6 - i)}T06:00:00+00:00", 4000, 1440)
+            metrics(s, a, time_in_zones_s=[1440, 0, 0, 0, 0])
+    f = get(client, "/api/stats/fitness")
+    assert f["ramp_pct"] == pytest.approx(100.0)
+    codes = {a["code"]: a["level"] for a in f["alerts"]}
+    assert codes["ramp"] == "high" and codes["acwr_high"] == "high"  # ACWR 28/((21*2+28)/4)=1.6
+    assert "monotony" not in codes  # sd = 0 -> no monotony value
+
+
+def test_fitness_no_ramp_without_base(engine, client):
+    with Session(engine) as s, s.begin():
+        add(s, f"{TODAY}T06:00:00+00:00", 10000, 3000)
+    f = get(client, "/api/stats/fitness")
+    assert f["ramp_pct"] is None and all(a["code"] != "ramp" for a in f["alerts"])
+
+
+def test_cadence_bands(engine, client):
+    with Session(engine) as s, s.begin():
+        for i in range(8):  # 5:15/km band, cadence +1 spm/day
+            a = add(
+                s, f"2026-09-{10 + i:02d}T06:00:00+00:00", 10000, 3150, avg_cadence_spm=160.0 + i
+            )
+            metrics(s, a, is_steady=True)
+        a = add(s, "2026-09-20T06:00:00+00:00", 10000, 2500, avg_cadence_spm=180.0)  # 4:10
+        metrics(s, a, is_steady=True)
+        a = add(s, "2026-09-21T06:00:00+00:00", 10000, 3150, avg_cadence_spm=200.0)
+        metrics(s, a, is_steady=False)  # not steady: ignored
+    d = get(client, "/api/stats/cadence-bands")
+    assert d["n"] == 9
+    b = {(x["lo"], x["hi"]): x for x in d["bands"]}
+    assert b[(None, 300.0)]["n"] == 1 and b[(None, 300.0)]["trend"] is None
+    mid = b[(300.0, 330.0)]
+    assert mid["n"] == 8 and mid["median_spm"] == 163.5
+    assert mid["trend"]["slope_per_day"] == pytest.approx(1.0)
+
+
+def test_trends_gap_ef_adj_and_hr_ref(engine, client):
+    with Session(engine) as s, s.begin():
+        a = add(s, "2026-09-10T06:00:00+00:00")
+        metrics(s, a, is_steady=True, gap_speed_ms=4.0, ef_adjusted=1.7)
+        b = add(s, "2026-09-11T06:00:00+00:00")
+        metrics(s, b, is_steady=False, hr_at_ref_pace=148.0)  # hr_ref counts non-steady runs
+    assert get(client, "/api/stats/trends", metric="gap")["points"][0]["value"] == 250.0
+    assert get(client, "/api/stats/trends", metric="ef_adj")["points"][0]["value"] == 1.7
+    hr = get(client, "/api/stats/trends", metric="hr_ref")
+    assert hr["n"] == 1 and hr["points"][0]["value"] == 148.0

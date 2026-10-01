@@ -2,11 +2,11 @@
 
 import math
 import statistics
-from bisect import bisect_left
+from bisect import bisect_left, bisect_right
 from collections.abc import Sequence
 from dataclasses import dataclass
 
-ALGO_VERSION = 3
+ALGO_VERSION = 4
 
 BEST_EFFORT_TARGETS = (400.0, 1000.0, 1609.34, 5000.0, 10000.0, 21097.5, 42195.0)
 MAX_ZONE_DT_S = 10.0
@@ -16,6 +16,28 @@ STEADY_MIN_SPEED_MS = 0.5  # windows slower than this are stops, not pace
 GPS_MAX_SPEED_MS = 7.0
 GPS_MAX_FAST_S = 10.0
 MAX_DISTANCE_SCALE = 1.05  # larger gaps = partial/broken stream, not GPS drift
+GRADE_WINDOW_M = 50.0  # grade over a centred 50 m window: per-sample altitude is too noisy
+MAX_GRADE = 0.45  # range Minetti measured
+REF_SPEED_WINDOW_S = 60.0  # pace from distance over a centred 60 s window: 1 Hz speed is noisy
+REF_MAX_GRADE = 0.02  # flat only
+REF_SKIP_START_S = 300.0  # warm-up: HR not settled yet
+REF_MIN_SAMPLES_S = 600.0  # at least 10 min of usable samples
+REF_SPEED_PCT = (
+    0.1,
+    0.9,
+)  # ref speed must lie inside this speed range of the run: no extrapolation
+# Hadley: pace slowdown % vs temperature °F + dew point °F (runner heuristic, `model`)
+HEAT_TABLE = (
+    (100, 0.0),
+    (110, 0.5),
+    (120, 1.0),
+    (130, 2.0),
+    (140, 3.0),
+    (150, 4.5),
+    (160, 6.0),
+    (170, 8.0),
+    (180, 10.0),
+)
 
 
 @dataclass(frozen=True)
@@ -223,3 +245,133 @@ def detect_gps_suspect(
         else:
             run_start = None
     return False
+
+
+def compute_grades(
+    distance_stream: Sequence[float], alt_stream: Sequence[float | None]
+) -> list[float | None]:
+    """Per-sample grade (rise/run) over a centred GRADE_WINDOW_M window, clamped to +-MAX_GRADE."""
+    d, half = distance_stream, GRADE_WINDOW_M / 2
+    out: list[float | None] = []
+    for i in range(len(d)):
+        # min/max with i: a non-monotonic stream (GPS distance glitch) must not index outside it
+        lo = min(bisect_left(d, d[i] - half), i)
+        hi = max(bisect_right(d, d[i] + half) - 1, i)
+        a0, a1 = alt_stream[lo], alt_stream[hi]
+        run = d[hi] - d[lo]
+        if a0 is None or a1 is None or run < GRADE_WINDOW_M / 4:
+            out.append(None)
+        else:
+            out.append(max(-MAX_GRADE, min(MAX_GRADE, (a1 - a0) / run)))
+    return out
+
+
+def minetti_factor(grade: float) -> float:
+    """Energy cost of running at `grade` relative to flat (Minetti 2002, J/kg/m polynomial)."""
+    g = grade
+    return (155.4 * g**5 - 30.4 * g**4 - 43.3 * g**3 + 46.3 * g**2 + 19.5 * g + 3.6) / 3.6
+
+
+def compute_gap_distance(
+    distance_stream: Sequence[float], grades: Sequence[float | None]
+) -> list[float]:
+    """Cumulative flat-equivalent distance: each segment weighted by its Minetti cost."""
+    out = [float(distance_stream[0])] if distance_stream else []
+    for i in range(1, len(distance_stream)):
+        g = grades[i]
+        f = minetti_factor(g) if g is not None else 1.0
+        out.append(out[-1] + (distance_stream[i] - distance_stream[i - 1]) * f)
+    return out
+
+
+def interp(xs: Sequence[float], ys: Sequence[float], x: float) -> float:
+    """Linear interpolation on non-decreasing `xs`, clamped at the ends."""
+    j = bisect_left(xs, x)
+    if j <= 0:
+        return ys[0]
+    if j >= len(xs):
+        return ys[-1]
+    seg = xs[j] - xs[j - 1]
+    return _lerp(ys[j - 1], ys[j], (x - xs[j - 1]) / seg) if seg > 0 else ys[j]
+
+
+def compute_split_gap_speeds(
+    distance_stream: Sequence[float], gap_distance: Sequence[float], splits: Sequence[SplitKm]
+) -> list[float | None]:
+    out: list[float | None] = []
+    start = float(distance_stream[0])
+    for sp in splits:
+        eq = interp(distance_stream, gap_distance, start + sp.distance_m) - interp(
+            distance_stream, gap_distance, start
+        )
+        out.append(eq / sp.elapsed_s if sp.elapsed_s > 0 else None)
+        start += sp.distance_m
+    return out
+
+
+def compute_hr_at_pace(
+    time_stream: Sequence[float],
+    distance_stream: Sequence[float],
+    hr_stream: Sequence[float | None],
+    grades: Sequence[float | None] | None,
+    ref_pace_s: float,
+) -> float | None:
+    """HR at `ref_pace_s` from a per-run least-squares line HR ~ speed (`model`).
+
+    Samples: after REF_SKIP_START_S, flat (|grade| <= REF_MAX_GRADE; unknown grade = flat),
+    speed = distance over a centred REF_SPEED_WINDOW_S window, time-weighted by Δt (capped).
+    None with < REF_MIN_SAMPLES_S of samples, ref speed outside the run's 10th-90th speed
+    percentile, or a non-positive slope (HR not following pace: bad sensor or all-out effort).
+    """
+    t, d, half = time_stream, distance_stream, REF_SPEED_WINDOW_S / 2
+    vs: list[float] = []
+    hs: list[float] = []
+    ws: list[float] = []
+    for i in range(len(t) - 1):
+        h, g = hr_stream[i], grades[i] if grades else None
+        dt = min(float(t[i + 1] - t[i]), MAX_ZONE_DT_S)
+        if h is None or dt <= 0 or t[i] - t[0] < REF_SKIP_START_S:
+            continue
+        if g is not None and abs(g) > REF_MAX_GRADE:
+            continue
+        lo, hi = min(bisect_left(t, t[i] - half), i), max(bisect_right(t, t[i] + half) - 1, i)
+        if t[hi] > t[lo] and (v := (d[hi] - d[lo]) / (t[hi] - t[lo])) >= STEADY_MIN_SPEED_MS:
+            vs.append(v)
+            hs.append(float(h))
+            ws.append(dt)
+    if sum(ws) < REF_MIN_SAMPLES_S:
+        return None
+    srt = sorted(vs)
+    v_ref = 1000 / ref_pace_s
+    if not srt[int(len(srt) * REF_SPEED_PCT[0])] <= v_ref <= srt[int(len(srt) * REF_SPEED_PCT[1])]:
+        return None
+    w = sum(ws)
+    mv, mh = (
+        sum(v * x for v, x in zip(vs, ws, strict=True)) / w,
+        sum(h * x for h, x in zip(hs, ws, strict=True)) / w,
+    )
+    var = sum(x * (v - mv) ** 2 for v, x in zip(vs, ws, strict=True))
+    if var <= 0:
+        return None
+    slope = sum(x * (v - mv) * (h - mh) for v, h, x in zip(vs, hs, ws, strict=True)) / var
+    return mh + slope * (v_ref - mv) if slope > 0 else None
+
+
+def heat_slowdown_pct(temp_c: float | None, dew_point_c: float | None) -> float:
+    """Expected pace slowdown % from heat+humidity (Hadley T+DP table, linear between rows)."""
+    if temp_c is None or dew_point_c is None:
+        return 0.0
+    x = (temp_c * 9 / 5 + 32) + (dew_point_c * 9 / 5 + 32)
+    xs, ys = [r[0] for r in HEAT_TABLE], [r[1] for r in HEAT_TABLE]
+    return interp(xs, ys, x)
+
+
+def compute_adjusted_ef(
+    gap_speed_ms: float | None,
+    avg_hr: float | None,
+    temp_c: float | None,
+    dew_point_c: float | None,
+) -> float | None:
+    """EF on grade-adjusted speed, scaled up by the heat slowdown (`model`)."""
+    ef = compute_efficiency_factor(gap_speed_ms, avg_hr) if gap_speed_ms else None
+    return ef * (1 + heat_slowdown_pct(temp_c, dew_point_c) / 100) if ef else None
