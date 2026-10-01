@@ -1,7 +1,8 @@
 #!/usr/bin/env bash
 # Nightly 03:30 UTC via systemd timer. Needs /etc/corsa/backup.env:
-#   RESTIC_REPOSITORY=s3:https://<ns>.compat.objectstorage.<region>.oraclecloud.com/<bucket>
-#   RESTIC_PASSWORD=...  AWS_ACCESS_KEY_ID=...  AWS_SECRET_ACCESS_KEY=...  HC_BACKUP_URL=https://hc-ping.com/<uuid>
+#   RESTIC_REPOSITORY=s3:https://<account_id>.r2.cloudflarestorage.com/<bucket>
+#   RESTIC_PASSWORD=...  AWS_ACCESS_KEY_ID=...  AWS_SECRET_ACCESS_KEY=...  AWS_DEFAULT_REGION=auto
+#   HC_BACKUP_URL=https://hc-ping.com/<uuid>
 set -euo pipefail
 set -a; . "${BACKUP_ENV:-/etc/corsa/backup.env}"; set +a
 DATA_DIR=${DATA_DIR:-/opt/corsa/data}
