@@ -6,7 +6,7 @@ from bisect import bisect_left
 from collections.abc import Sequence
 from dataclasses import dataclass
 
-ALGO_VERSION = 2
+ALGO_VERSION = 3
 
 BEST_EFFORT_TARGETS = (400.0, 1000.0, 1609.34, 5000.0, 10000.0, 21097.5, 42195.0)
 MAX_ZONE_DT_S = 10.0
@@ -15,6 +15,7 @@ STEADY_WINDOW_S = 60
 STEADY_MIN_SPEED_MS = 0.5  # windows slower than this are stops, not pace
 GPS_MAX_SPEED_MS = 7.0
 GPS_MAX_FAST_S = 10.0
+MAX_DISTANCE_SCALE = 1.05  # larger gaps = partial/broken stream, not GPS drift
 
 
 @dataclass(frozen=True)
@@ -127,9 +128,10 @@ def _best_ending_at_samples(
 
 def scale_distance_stream(d: Sequence[float], total_m: float | None) -> list[float]:
     """Stretch the stream so it ends at the summary distance when the summary is longer
-    (provider-corrected distance or footpod total vs raw GPS track)."""
+    (provider-corrected distance or footpod total vs raw GPS track). Capped at
+    MAX_DISTANCE_SCALE: beyond that the stream is incomplete and is left untouched."""
     out = [float(x) for x in d]
-    if total_m and out and out[-1] > 0 and total_m > out[-1]:
+    if total_m and out and out[-1] > 0 and out[-1] < total_m <= out[-1] * MAX_DISTANCE_SCALE:
         k = total_m / out[-1]
         out = [x * k for x in out]
     return out

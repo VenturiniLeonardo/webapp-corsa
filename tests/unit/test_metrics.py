@@ -172,6 +172,7 @@ def test_gps_suspect() -> None:
 def test_scale_distance_stream_stretches_to_summary_only_when_longer() -> None:
     from app.metrics.engine import scale_distance_stream
 
-    assert scale_distance_stream([0, 10, 20], 40) == [0, 20, 40]
+    assert scale_distance_stream([0, 100, 200], 202) == [0, 101, 202]
+    assert scale_distance_stream([0, 100, 200], 400) == [0, 100, 200]  # broken stream
     assert scale_distance_stream([0, 10, 20], 15) == [0, 10, 20]
     assert scale_distance_stream([0, 10, 20], None) == [0, 10, 20]
