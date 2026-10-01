@@ -40,10 +40,11 @@ curl -f http://127.0.0.1:8000/healthz
 Backup env (`/etc/corsa/backup.env`, root:root, chmod 600):
 
 ```
-RESTIC_REPOSITORY=s3:https://<namespace>.compat.objectstorage.<region>.oraclecloud.com/<bucket>
+RESTIC_REPOSITORY=s3:https://<account_id>.eu.r2.cloudflarestorage.com/<bucket>   # drop ".eu" if the bucket has no EU jurisdiction
 RESTIC_PASSWORD=...            # password manager
-AWS_ACCESS_KEY_ID=...          # OCI Customer Secret Key
+AWS_ACCESS_KEY_ID=...          # Cloudflare R2 API token (Object Read & Write, scoped to the bucket)
 AWS_SECRET_ACCESS_KEY=...
+AWS_DEFAULT_REGION=auto
 HC_BACKUP_URL=https://hc-ping.com/<uuid>
 ```
 
@@ -74,7 +75,7 @@ sudo systemctl daemon-reload && sudo systemctl enable --now corsa-backup.timer
 systemctl list-timers corsa-backup.timer
 ```
 
-Docker starts on boot and containers use `restart: unless-stopped`, so no app unit is needed. Healthchecks.io: create checks `backup` (period 24 h, grace 2 h) and `sync` (period 30 min, grace 3 h).
+Docker starts on boot and containers use `restart: unless-stopped`, so no app unit is needed. Healthchecks.io: create checks `backup` (period 24 h, grace 2 h)
 
 ## 2. Deploy / rollback
 
@@ -91,7 +92,7 @@ New VM (Oracle reclaimed it, account issue, corruption):
 2. `git clone` into `/opt/corsa`.
 3. `sudo ./scripts/restore.sh` (restores latest snapshot, integrity-checks, prints activity count).
 4. `./scripts/deploy.sh` then verify `/healthz` and the activity count in the UI.
-5. Re-check Strava connection in Settings (re-authorize if tokens were rotated after the snapshot). Re-enable the backup timer.
+5. Re-enable the backup timer.
 
 Target RTO < 2 h.
 
@@ -112,10 +113,9 @@ Pass = integrity ok, count within last-night delta, latest date matches. Also ru
 
 | Secret | Steps |
 |--------|-------|
-| Strava client secret | Strava API settings → regenerate → update `.env` → `docker compose up -d` → Settings: verify sync works (refresh token may need re-auth). Refresh tokens rotate automatically on each refresh. |
-| OCI Customer Secret Key | OCI console → user → create new key → update `/etc/corsa/backup.env` → `sudo ./scripts/backup.sh` succeeds → delete old key. |
+| R2 API token | Cloudflare dashboard → R2 → Manage API tokens → create new token → update `/etc/corsa/backup.env` → `sudo ./scripts/backup.sh` succeeds → delete old key. |
 | restic password | `restic key add` (new) → update `backup.env` → `restic key remove <old-id>` → store in password manager. Verify `restic snapshots`. |
-| healthchecks URL | Regenerate ping key/UUID → update `backup.env` and `.env` (sync ping) → `docker compose up -d`. |
+| healthchecks URL | Regenerate ping key/UUID → update `backup.env`. |
 | OpenRouter API key | openrouter.ai → Keys → create new → `OPENROUTER_API_KEY` in `.env` → `docker compose up -d` → delete old key. Empty value disables AI. |
 | Tailscale | Machine key expiry: `sudo tailscale up --ssh --hostname corsa` (re-auth) or disable key expiry in admin console. |
 
@@ -123,9 +123,8 @@ After any `.env` change: update the copy in the password manager, then `docker c
 
 ## 5. Misc
 
-- Logs: `docker compose logs --tail=100 api worker`; failed jobs in `/sync`.
+- Logs: `docker compose logs --tail=100 api worker`; failed jobs in `/sync` (Import page).
 - Disk: `df -h /opt/corsa/data` (backup fails at ≥ 80%).
-- Strava base URL moves to `api-v3.strava.com` by 2027-01-04: change the configurable base URL in `.env`.
 
 ## 6. AI analysis (OpenRouter)
 

@@ -12,6 +12,11 @@ ping() { [ -z "${HC_BACKUP_URL:-}" ] || curl -fsS -m 10 --retry 3 "$HC_BACKUP_UR
 trap 'rc=$?; rm -rf "$TMP"; [ $rc -eq 0 ] || ping /fail' EXIT
 ping /start
 
+# R2 free tier = 10 GB: refuse to upload at/over the cap, fail (alert) at 80%.
+LIMIT=${BUCKET_LIMIT_BYTES:-10000000000}
+bucket_bytes() { restic stats --mode raw-data --json | grep -o '"total_size":[0-9]*' | cut -d: -f2; }
+[ "$(bucket_bytes)" -lt "$LIMIT" ] || { echo "bucket >= $LIMIT bytes, backup skipped" >&2; exit 1; }
+
 sqlite3 "$DATA_DIR/corsa.db" ".backup $TMP/backup.db"
 # ponytail: stored under fixed name so restic dedups across nights; uploads/ added only if present
 cd "$TMP"
@@ -22,5 +27,8 @@ restic forget --tag corsa --host corsa --keep-daily 7 --keep-weekly 4 --keep-mon
 
 use=$(df --output=pcent "$DATA_DIR" | tail -1 | tr -dc 0-9)
 if [ "$use" -ge 80 ]; then echo "disk usage ${use}% >= 80%" >&2; exit 1; fi
+
+used=$(bucket_bytes)
+if [ "$used" -ge $((LIMIT / 10 * 8)) ]; then echo "bucket usage $used / $LIMIT bytes >= 80%" >&2; exit 1; fi
 
 ping ""
