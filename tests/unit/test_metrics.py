@@ -3,6 +3,7 @@ import pytest
 from app.metrics.engine import (
     compute_adjusted_ef,
     compute_best_efforts,
+    compute_decoupling,
     compute_efficiency_factor,
     compute_gap_distance,
     compute_grades,
@@ -238,3 +239,16 @@ def test_heat_slowdown_and_adjusted_ef() -> None:
 def test_grades_survive_non_monotonic_distance() -> None:
     d = [0.0, 10.0, 20.0, 30.0, 5.0]  # glitch: distance drops at the end
     assert len(compute_grades(d, [0.0] * 5)) == 5
+
+
+def test_decoupling_halves_by_moving_time() -> None:
+    n = 3600  # 60 min at 3 m/s; HR 140 then 154 (+10%) in the second half
+    t = [float(i) for i in range(n)]
+    d = [3.0 * i for i in range(n)]
+    hr = [140.0 if i < 1800 else 154.0 for i in range(n)]
+    assert compute_decoupling(t, d, hr) == pytest.approx((1 - 140 / 154) * 100, abs=0.05)
+    assert compute_decoupling(t, d, [150.0] * n) == pytest.approx(0.0)
+    assert compute_decoupling(t[:2000], d[:2000], hr[:2000]) is None  # < 45 min
+    # a 20 min pause (one long gap) counts in neither half
+    t2 = [x if i < 1800 else x + 1200 for i, x in enumerate(t)]
+    assert compute_decoupling(t2, d, hr) == pytest.approx((1 - 140 / 154) * 100, abs=0.05)

@@ -301,6 +301,7 @@ export default function ActivityDetailPage() {
           <Stat label="Max HR" value={a.max_hr != null ? `${Math.round(a.max_hr)} bpm` : '—'} />
           <Stat label="EF" value={ef != null ? ef.toFixed(2) : '—'} delta={delta(ef, sim.map((s) => s.efficiency_factor), (x) => x.toFixed(2))} />
           <Stat label="EF corretto" value={m?.ef_adjusted != null ? m.ef_adjusted.toFixed(2) : '—'} model="EF on grade-adjusted speed, raised by the expected heat slowdown" />
+          <Stat label="Decoupling" value={m?.decoupling_pct != null ? `${m.decoupling_pct.toFixed(1)}%` : '—'} />
           <Stat label={`HR @ ${clock(refPace)}`} value={m?.hr_at_ref_pace != null ? `${Math.round(m.hr_at_ref_pace)} bpm` : '—'} />
         </Group>
         <Group title="Terrain">

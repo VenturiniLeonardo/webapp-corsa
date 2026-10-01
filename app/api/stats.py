@@ -38,7 +38,7 @@ HIST: dict[str, tuple[Any, str, tuple[float, ...]]] = {
     "duration": (A.moving_s, "s", (1800, 2700, 3600, 5400, 7200)),
     "pace": (PACE, "s/km", (240, 270, 300, 330, 360, 390, 420)),
 }
-TrendMetric = Literal["pace", "gap", "ef", "ef_adj", "hr", "hr_ref", "cadence"]
+TrendMetric = Literal["pace", "gap", "ef", "ef_adj", "hr", "hr_ref", "cadence", "decoupling"]
 TREND_VALUE: dict[str, tuple[Any, str]] = {
     "pace": (PACE, "s/km"),
     "gap": (1000.0 / func.nullif(ActivityMetrics.gap_speed_ms, 0), "s/km"),
@@ -47,6 +47,7 @@ TREND_VALUE: dict[str, tuple[Any, str]] = {
     "hr": (A.avg_hr, "bpm"),
     "hr_ref": (ActivityMetrics.hr_at_ref_pace, "bpm"),
     "cadence": (A.avg_cadence_spm, "spm"),
+    "decoupling": (ActivityMetrics.decoupling_pct, "%"),
 }
 ALL_RUNS_METRICS = {"hr_ref"}  # already pace-normalised: no need to restrict to steady runs
 # cadence bands by pace, s/km: class i is [edge[i-1], edge[i])

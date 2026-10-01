@@ -169,6 +169,8 @@ def _compute_metrics(s: Session, act: Activity, ch: dict[str, list[Any]], cfg: C
             speed, t, bool(act.is_indoor), act.workout_type, cv
         )
         m.gps_suspect = metrics.detect_gps_suspect(speed, t)
+    if t and d and hr and m.is_steady:
+        m.decoupling_pct = metrics.compute_decoupling(t, gap_d or d, hr)
     if t and d and hr and not act.is_indoor:
         m.hr_at_ref_pace = metrics.compute_hr_at_pace(t, d, hr, grades, ref_pace)
     if d and gap_d and act.distance_m and act.moving_s and d[-1] > d[0]:

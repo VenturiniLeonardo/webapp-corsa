@@ -127,6 +127,7 @@ export default function DashboardPage() {
   const ef = useQuery(q<Trends>('/api/stats/trends', { metric: 'ef' }))
   const efAdj = useQuery(q<Trends>('/api/stats/trends', { metric: 'ef_adj' }))
   const hrRef = useQuery(q<Trends>('/api/stats/trends', { metric: 'hr_ref' }))
+  const decoupling = useQuery(q<Trends>('/api/stats/trends', { metric: 'decoupling' }))
   const cadence = useQuery(q<CadenceBands>('/api/stats/cadence-bands'))
   const settings = useQuery({ queryKey: ['settings'], queryFn: () => api<{ ref_pace_s_per_km: number | null }>('/api/settings') })
   const paceHr = useQuery(q<PaceHr>('/api/stats/pace-hr'))
@@ -181,6 +182,7 @@ export default function DashboardPage() {
         <PaceChart data={pace.data} gap={gap.data} />
         <EfChart data={ef.data} adj={efAdj.data} />
         <HrRefChart data={hrRef.data} refPace={settings.data?.ref_pace_s_per_km ?? 420} />
+        <DecouplingChart data={decoupling.data} />
         <CadenceChart data={cadence.data} />
         <PaceHrChart data={paceHr.data} />
       </Group>
@@ -811,6 +813,27 @@ function EfChart({ data: raw, adj }: { data?: Trends; adj?: Trends }) {
       help="EF = moving speed (m/min) / avg HR, steady runs only; higher = faster per heartbeat. Line = trailing 28-day median. Dashed = Theil-Sen slope (median of pairwise slopes), hidden when n < 8. Corretto (model) = EF on grade-adjusted speed, raised by the expected heat slowdown (Hadley: temperature + dew point, °F) when weather is enabled in Settings."
     >
       {n ? <Chart option={option} /> : <Empty what="steady runs" />}
+    </Card>
+  )
+}
+
+function DecouplingChart({ data }: { data?: Trends }) {
+  const { label, series } = fitted(data, C.hr, (x) => `${x.toFixed(1)}%`, (c) => signed(c, `${Math.abs(c).toFixed(1)} pt`), 'runs')
+  const option: EChartsOption = {
+    ...base,
+    tooltip: { ...base.tooltip, trigger: 'item' },
+    xAxis: { type: 'time', axisLine, splitLine: { show: false } },
+    yAxis: { type: 'value', scale: true, splitLine, axisLabel: { formatter: '{value}%' } },
+    series,
+  }
+  return (
+    <Card
+      title="Aerobic decoupling"
+      n={data?.n}
+      extra={label}
+      help="Pa:HR (Friel): how much EF drops from the first to the second half of moving time, on grade-adjusted distance. Steady runs over 45 min only. Under 5% = good aerobic endurance at that effort; it rises with duration, heat and dehydration. Lower over time = better endurance."
+    >
+      {data?.n ? <Chart option={option} /> : <Empty what="steady runs over 45 min" />}
     </Card>
   )
 }

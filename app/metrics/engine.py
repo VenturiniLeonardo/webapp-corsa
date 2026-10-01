@@ -6,7 +6,7 @@ from bisect import bisect_left, bisect_right
 from collections.abc import Sequence
 from dataclasses import dataclass
 
-ALGO_VERSION = 4
+ALGO_VERSION = 5
 
 BEST_EFFORT_TARGETS = (400.0, 1000.0, 1609.34, 5000.0, 10000.0, 21097.5, 42195.0)
 MAX_ZONE_DT_S = 10.0
@@ -18,6 +18,7 @@ GPS_MAX_FAST_S = 10.0
 MAX_DISTANCE_SCALE = 1.05  # larger gaps = partial/broken stream, not GPS drift
 GRADE_WINDOW_M = 50.0  # grade over a centred 50 m window: per-sample altitude is too noisy
 MAX_GRADE = 0.45  # range Minetti measured
+DECOUPLING_MIN_S = 2700  # PLAN M7-04: steady runs > 45 min only
 REF_SPEED_WINDOW_S = 60.0  # pace from distance over a centred 60 s window: 1 Hz speed is noisy
 REF_MAX_GRADE = 0.02  # flat only
 REF_SKIP_START_S = 300.0  # warm-up: HR not settled yet
@@ -375,3 +376,42 @@ def compute_adjusted_ef(
     """EF on grade-adjusted speed, scaled up by the heat slowdown (`model`)."""
     ef = compute_efficiency_factor(gap_speed_ms, avg_hr) if gap_speed_ms else None
     return ef * (1 + heat_slowdown_pct(temp_c, dew_point_c) / 100) if ef else None
+
+
+def compute_decoupling(
+    time_stream: Sequence[float],
+    distance_stream: Sequence[float],
+    hr_stream: Sequence[float | None],
+) -> float | None:
+    """Aerobic decoupling Pa:HR, % (Friel): (EF first half - EF second half) / EF first half.
+
+    Halves split at the midpoint of moving time; EF = distance / moving time / time-weighted HR.
+    Gaps > MAX_ZONE_DT_S are pauses and count in neither half. Positive = HR drifted up.
+    Pass the GAP distance stream to neutralise a course that climbs in one half.
+    """
+    segs = [
+        (t0, t1 - t0, d1 - d0, h)
+        for t0, t1, d0, d1, h in zip(
+            time_stream,
+            time_stream[1:],
+            distance_stream,
+            distance_stream[1:],
+            hr_stream,
+            strict=False,
+        )
+        if 0 < t1 - t0 <= MAX_ZONE_DT_S and h is not None
+    ]
+    moving = sum(dt for _, dt, _, _ in segs)
+    if moving < DECOUPLING_MIN_S:
+        return None
+    halves = [[0.0, 0.0, 0.0], [0.0, 0.0, 0.0]]  # moving s, metres, HR*s
+    acc = 0.0
+    for _, dt, dd, h in segs:
+        half = halves[acc >= moving / 2]
+        half[0], half[1], half[2] = half[0] + dt, half[1] + dd, half[2] + h * dt
+        acc += dt
+    (t1, d1, h1), (t2, d2, h2) = halves
+    if not (d1 > 0 and d2 > 0 and h1 > 0 and h2 > 0):
+        return None
+    ef1, ef2 = (d1 / t1) / (h1 / t1), (d2 / t2) / (h2 / t2)
+    return (ef1 - ef2) / ef1 * 100
