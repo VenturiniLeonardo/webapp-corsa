@@ -11,7 +11,7 @@ from datetime import UTC, datetime
 from functools import partial
 from itertools import pairwise
 from pathlib import PurePosixPath
-from statistics import fmean
+from statistics import fmean, median
 from typing import Any
 from zoneinfo import ZoneInfo
 
@@ -154,6 +154,14 @@ def _hold(v: list[Any], t: list[float], gap: float = 15) -> list[Any]:
     return out
 
 
+def _despike(v: list[float | None], w: int = 2) -> list[float | None]:
+    """Rolling median (window 2w+1): drops isolated 0/2x speed glitches, keeps real changes."""
+    return [
+        median(win) if (win := [x for x in v[max(0, i - w) : i + w + 1] if x is not None]) else None
+        for i in range(len(v))
+    ]
+
+
 def _avg(v: list[Any]) -> float | None:
     v = [x for x in v if x]
     return round(fmean(v), 1) if v else None
@@ -188,6 +196,7 @@ def build_draft(
             (d1 - d0) / (t1 - t0) if t1 > t0 else 0.0 for (d0, d1), (t0, t1) in
             zip(pairwise(d), pairwise(t), strict=True)
         ]  # fmt: skip
+    speed = _despike(speed)
     # ponytail: moving = gaps <= 30 s at >= 0.5 m/s; FIT timer time overrides it when present
     moving = sum(
         t1 - t0

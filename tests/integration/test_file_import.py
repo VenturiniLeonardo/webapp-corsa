@@ -121,3 +121,10 @@ def test_rejections(client):  # noqa: F811
         110,
         110,
     ]
+
+
+def test_despike_removes_isolated_speed_glitches():
+    from app.ingest.files import _despike
+
+    v = [2.0, 2.0, 0.0, 2.0, 3.9, 2.0, 2.0]
+    assert _despike(v) == [2.0] * 7
