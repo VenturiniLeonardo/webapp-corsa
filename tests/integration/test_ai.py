@@ -31,8 +31,6 @@ MSGS = [{"role": "user", "content": "x"}]
 @pytest.fixture(autouse=True)
 def env(monkeypatch):
     for k, v in {
-        "STRAVA_CLIENT_ID": "cid",
-        "STRAVA_CLIENT_SECRET": "sec",
         "ALLOWED_LOGINS": "me",
         "DATABASE_URL": "sqlite://",
         "ENV": "dev",

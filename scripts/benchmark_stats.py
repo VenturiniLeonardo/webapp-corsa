@@ -14,8 +14,6 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parent.parent
 sys.path[:0] = [str(ROOT), str(ROOT / "scripts")]
 for k, v in {
-    "STRAVA_CLIENT_ID": "bench",
-    "STRAVA_CLIENT_SECRET": "bench",
     "ALLOWED_LOGINS": "bench",
     "DATABASE_URL": "sqlite://",
     "ENV": "dev",

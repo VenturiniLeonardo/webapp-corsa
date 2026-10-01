@@ -874,7 +874,7 @@ Should (M7): **AC-19** un FIT HealthFit di una corsa già importata da Strava vi
 - *Trade-off*: più join e la logica di precedenza tra sorgenti.
 - *Futuro*: aggiungere una sorgente = un mapper + un valore dell'enum. **Decisione più difficile da cambiare di tutto il progetto.**
 
-**ADR-05 — Strava via polling come sorgente primaria**
+**ADR-05 — Strava via polling come sorgente primaria** — **SUPERATO (2026-10-01)** [DECISIONE]: integrazione API/OAuth Strava rimossa per complessità di gestione; unica sorgente = import da file (export Strava .zip, FIT/GPX/TCX, Health Auto Export). La tabella `provider_accounts` resta nel DB, inutilizzata. Sorgente automatica sostitutiva: pull da intervals.icu (API key, polling 30 min, file originali importati come file; le attività che intervals.icu riceve da Strava non sono esposte dalla sua API).
 - *Alternative*: webhook; export in bulk periodico; Apple come primaria.
 - *Perché*: i webhook richiedono un endpoint pubblico (in contrasto con l'accesso privato); il polling ogni 30 minuti usa circa il 10% del budget giornaliero; Strava ha già i dati Apple in forma pulita e completa (salvo la cadenza).
 - *Trade-off*: latenza fino a 30 minuti; le cancellazioni sono viste solo con la riconciliazione settimanale.

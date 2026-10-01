@@ -8,10 +8,10 @@ from pydantic_settings import BaseSettings, NoDecode, SettingsConfigDict
 class Settings(BaseSettings):
     model_config = SettingsConfigDict(env_file=".env", extra="ignore")
 
-    STRAVA_CLIENT_ID: str
-    STRAVA_CLIENT_SECRET: str
-    STRAVA_API_BASE: str = "https://www.strava.com/api/v3"
-    HEALTHCHECK_URL_SYNC: str = ""
+    # intervals.icu pull (empty key = disabled). Key from intervals.icu /settings; "0" = own athlete.
+    INTERVALS_API_KEY: str = ""
+    INTERVALS_ATHLETE_ID: str = "0"
+    INTERVALS_BASE_URL: str = "https://intervals.icu"
     ALLOWED_LOGINS: Annotated[set[str], NoDecode]
     DATABASE_URL: str
     ENV: Literal["dev", "prod"]

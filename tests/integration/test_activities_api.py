@@ -1,8 +1,4 @@
-import time
-
-import httpx
 import pytest
-import respx
 from fastapi.testclient import TestClient
 from sqlalchemy.orm import Session
 
@@ -14,35 +10,25 @@ from app.domain.models import (
     Base,
     BestEffort,
     Lap,
-    ProviderAccount,
     Setting,
     SourceRecord,
     Stream,
 )
 from app.domain.stream_codec import encode_stream
-from app.ingest.strava_client import StravaClient
 from app.main import app
-from app.worker.queue import JobQueue
-from app.worker.runner import Runner
 
-BASE = "https://www.strava.com/api/v3"
-T0 = "2026-09-01T07:00:00Z"
 CSRF = {"X-Corsa": "1"}
 
 
 @pytest.fixture(autouse=True)
 def env(monkeypatch):
     for k, v in {
-        "STRAVA_CLIENT_ID": "cid",
-        "STRAVA_CLIENT_SECRET": "sec",
         "ALLOWED_LOGINS": "me",
         "DATABASE_URL": "sqlite://",
         "ENV": "dev",
         "AUTH_DEV_LOGIN": "me",
     }.items():
         monkeypatch.setenv(k, v)
-    monkeypatch.delenv("STRAVA_API_BASE", raising=False)
-    monkeypatch.delenv("HEALTHCHECK_URL_SYNC", raising=False)
     get_settings.cache_clear()
     yield
     get_settings.cache_clear()
@@ -53,15 +39,6 @@ def engine(tmp_path):
     e = make_engine(f"sqlite:///{tmp_path / 'p.db'}")
     Base.metadata.create_all(e)
     with Session(e) as s, s.begin():
-        s.add(
-            ProviderAccount(
-                provider="strava",
-                access_token="at",
-                refresh_token="rt",
-                expires_at=int(time.time()) + 3600,
-                status="active",
-            )
-        )
         s.add(Setting(key="hr_zones", value=[130, 145, 160, 175]))
     yield e
     e.dispose()
@@ -336,50 +313,3 @@ def test_patch_updates_local_fields_only(engine, client):
     assert (
         client.patch(f"/api/activities/{aid}", json={"notes": "x"}).status_code == 403
     )  # no X-Corsa
-
-
-def summary(i, **kw):
-    return {"id": i, "sport_type": "Run", "name": f"Run {i}", "start_date": T0,
-            "distance": 3000.0, **kw}  # fmt: skip
-
-
-def detail(i, **kw):
-    return {**summary(i), "timezone": "(GMT+01:00) Europe/Rome", "moving_time": 900,
-            "elapsed_time": 910, "average_heartrate": 150, **kw}  # fmt: skip
-
-
-@respx.mock
-def test_sync_does_not_overwrite_local_fields(engine, client):
-    q_ = JobQueue(engine)
-    runner = Runner(engine, StravaClient(engine, http=httpx.Client()), q_)
-
-    def sync(kind, name):
-        respx.get(f"{BASE}/athlete/activities").respond(200, json=[summary(1, name=name)])
-        respx.get(f"{BASE}/activities/1").respond(200, json=detail(1, name=name, workout_type=3))
-        respx.get(f"{BASE}/activities/1/streams").respond(404)
-        q_.enqueue(kind, {})
-        job = q_.claim_job()
-        runner.execute(job)
-
-    sync("strava_backfill", "Run 1")
-    with Session(engine) as s:
-        aid = s.query(Activity.id).scalar()
-    assert client.get(f"/api/activities/{aid}").json()["activity"]["workout_type"] == "workout"
-
-    client.patch(
-        f"/api/activities/{aid}",
-        json={
-            "notes": "mine",
-            "workout_type": "race",
-            "excluded_from_stats": True,
-            "tags": ["keep"],
-        },
-        headers=CSRF,
-    )
-    sync("strava_sync", "Renamed")  # upstream change -> full re-import of the activity
-
-    a = client.get(f"/api/activities/{aid}").json()["activity"]
-    assert a["name"] == "Renamed"  # sync-owned field was refreshed ...
-    assert (a["notes"], a["workout_type"], a["excluded_from_stats"], a["tags"]) == (
-        "mine", "race", True, ["keep"],
-    )  # fmt: skip  # ... local ones survived

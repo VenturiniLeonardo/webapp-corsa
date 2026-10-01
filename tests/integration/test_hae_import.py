@@ -13,8 +13,6 @@ from app.main import app
 @pytest.fixture
 def client(tmp_path, monkeypatch):
     for k, v in {
-        "STRAVA_CLIENT_ID": "c",
-        "STRAVA_CLIENT_SECRET": "s",
         "ALLOWED_LOGINS": "me",
         "DATABASE_URL": "sqlite://",
         "ENV": "dev",

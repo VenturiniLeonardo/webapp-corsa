@@ -4,7 +4,7 @@ from sqlalchemy.orm import Session
 
 from app.core.config import get_settings
 from app.core.db import get_session, make_engine
-from app.domain.models import Base, Job, ProviderAccount, SourceRecord
+from app.domain.models import Base, Job, SourceRecord
 from app.main import app
 
 H = {"X-Corsa": "1", "Content-Type": "application/json"}
@@ -13,8 +13,6 @@ H = {"X-Corsa": "1", "Content-Type": "application/json"}
 @pytest.fixture(autouse=True)
 def env(monkeypatch):
     for k, v in {
-        "STRAVA_CLIENT_ID": "cid",
-        "STRAVA_CLIENT_SECRET": "sec",
         "ALLOWED_LOGINS": "me",
         "DATABASE_URL": "sqlite://",
         "ENV": "dev",
@@ -79,46 +77,16 @@ def test_put_requires_csrf_headers(client):
     assert client.put("/api/settings", json={"hr_rest": 50}).status_code == 403
 
 
-def test_sync_dedup_and_jobs(client, engine):
-    a = client.post("/api/sync", headers=H).json()["job_id"]
-    b = client.post("/api/sync", headers=H).json()["job_id"]
-    assert a == b and jobs(engine, "strava_sync") == ["queued"]
+def test_jobs_list_and_detail(client, engine):
+    with Session(engine) as s, s.begin():
+        s.add(Job(kind="recompute", status="done", params={}))
+        s.add(
+            SourceRecord(source="file_fit", external_id="1", status="error", error="boom", job_id=1)
+        )
     lst = client.get("/api/jobs").json()
-    assert [j["id"] for j in lst] == [a] and lst[0]["status"] == "queued"
+    assert [j["id"] for j in lst] == [1] and lst[0]["status"] == "done"
     assert client.get("/api/jobs", params={"status": "failed"}).json() == []
-    d = client.get(f"/api/jobs/{a}").json()
-    assert d["job"]["kind"] == "strava_sync" and d["failed_records"] == []
-    assert client.get("/api/jobs/999").status_code == 404
-
-
-def test_strava_status(client, engine):
-    assert client.get("/api/strava/status").json()["connected"] is False
-    with Session(engine) as s, s.begin():
-        s.add(
-            ProviderAccount(
-                provider="strava",
-                athlete_id="42",
-                refresh_token="rt",
-                scopes="activity:read_all",
-                status="active",
-                last_sync_at="2026-09-30T10:00:00+00:00",
-            )
-        )
-    r = client.get("/api/strava/status").json()
-    assert r["connected"] and r["athlete_id"] == "42" and r["rate_usage"]["limit_day"] == 900
-    assert r["last_sync_at"] == "2026-09-30T10:00:00+00:00"
-
-
-def test_retry_failed_record(client, engine):
-    with Session(engine) as s, s.begin():
-        s.add(Job(kind="strava_sync", status="done", params={}))
-        s.add(
-            SourceRecord(source="strava", external_id="1", status="error", error="boom", job_id=1)
-        )
-        s.add(SourceRecord(source="strava", external_id="2", status="mapped"))
     d = client.get("/api/jobs/1").json()
+    assert d["job"]["kind"] == "recompute"
     assert d["failed_records"] == [{"id": 1, "external_id": "1", "error": "boom"}]
-    r = client.post("/api/source-records/1/retry", headers=H)
-    assert r.status_code == 200 and jobs(engine, "strava_backfill") == ["queued"]
-    assert client.post("/api/source-records/2/retry", headers=H).status_code == 409
-    assert client.post("/api/source-records/9/retry", headers=H).status_code == 404
+    assert client.get("/api/jobs/999").status_code == 404

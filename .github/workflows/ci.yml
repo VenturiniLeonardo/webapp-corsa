@@ -100,7 +100,6 @@ jobs:
       - name: Smoke test (migrations + /healthz)
         run: |
           docker run -d --name corsa -p 8000:8000 \
-            -e STRAVA_CLIENT_ID=ci -e STRAVA_CLIENT_SECRET=ci \
             -e ALLOWED_LOGINS=ci -e AUTH_DEV_LOGIN=ci -e ENV=dev \
             -e DATABASE_URL=sqlite:////data/corsa.db \
             corsa:ci sh -c "alembic upgrade head && uvicorn app.main:app --host 0.0.0.0 --port 8000"

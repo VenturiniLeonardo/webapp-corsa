@@ -14,8 +14,6 @@ if not (DIST / "index.html").exists():
     raise SystemExit(f"{DIST} missing: run `npm run build` in web/")
 
 os.environ.update(
-    STRAVA_CLIENT_ID="e2e",
-    STRAVA_CLIENT_SECRET="e2e",
     ALLOWED_LOGINS="e2e",
     AUTH_DEV_LOGIN="e2e",
     ENV="dev",

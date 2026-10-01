@@ -2,7 +2,7 @@
 
 [![CI](https://github.com/VenturiniLeonardo/webapp-corsa/actions/workflows/ci.yml/badge.svg)](https://github.com/VenturiniLeonardo/webapp-corsa/actions/workflows/ci.yml)
 
-Piattaforma personale di analisi della corsa: importa le attività da Strava, le salva in un modello dati indipendente dal provider e calcola metriche proprie (split, best effort, zone FC, efficienza). Single-user, dark-only, accessibile solo via Tailscale.
+Piattaforma personale di analisi della corsa: importa le attività da file (export Strava .zip, FIT/GPX/TCX, Health Auto Export), le salva in un modello dati indipendente dal provider e calcola metriche proprie (split, best effort, zone FC, efficienza). Single-user, dark-only, accessibile solo via Tailscale.
 
 Riferimento completo: [`docs/PLAN.md`](docs/PLAN.md) · Operazioni: [`docs/RUNBOOK.md`](docs/RUNBOOK.md)
 
@@ -15,7 +15,7 @@ FastAPI · SQLite (WAL) · worker con job queue su SQLite · React + TypeScript 
 Requisiti: Python ≥ 3.13, Node 20.
 
 ```bash
-cp .env.example .env            # compila i valori Strava
+cp .env.example .env            # compila i valori
 pip install -e ".[dev]"
 alembic upgrade head
 uvicorn app.main:app --reload --host 127.0.0.1 --port 8000

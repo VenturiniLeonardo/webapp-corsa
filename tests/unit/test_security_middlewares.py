@@ -5,9 +5,6 @@ from app.core.config import get_settings
 from app.main import app
 
 BASE = {
-    "STRAVA_CLIENT_ID": "x",
-    "STRAVA_CLIENT_SECRET": "x",
-    "STRAVA_API_BASE": "https://www.strava.com/api/v3",
     "ALLOWED_LOGINS": "me@x, you@x",
     "DATABASE_URL": "sqlite://",
     "AUTH_DEV_LOGIN": "dev_user",
@@ -36,7 +33,6 @@ def test_post_without_csrf_header_403(monkeypatch: pytest.MonkeyPatch) -> None:
     assert (
         c.post("/api/x", headers={**h, "X-Corsa": "1"}, json={}).status_code == 405
     )  # passed middleware
-    assert c.post("/api/strava/callback").status_code == 405  # exempt
 
 
 def test_healthz_ok_with_headers(monkeypatch: pytest.MonkeyPatch) -> None:

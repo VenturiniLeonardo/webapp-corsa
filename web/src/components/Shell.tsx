@@ -1,5 +1,5 @@
 import { useQuery } from '@tanstack/react-query'
-import { Activity, BarChart3, LayoutDashboard, RefreshCw, Trophy } from 'lucide-react'
+import { Activity, BarChart3, LayoutDashboard, Trophy, Upload } from 'lucide-react'
 import { NavLink, Outlet } from 'react-router-dom'
 import { api } from '../api/client'
 import { FB, FC, Fonts } from './ui'
@@ -8,7 +8,7 @@ const links = [
   { to: '/', label: 'Dashboard', icon: LayoutDashboard },
   { to: '/activities', label: 'Allenamenti', icon: Activity },
   { to: '/records', label: 'Record', icon: Trophy },
-  { to: '/sync', label: 'Sync', icon: RefreshCw },
+  { to: '/sync', label: 'Import', icon: Upload },
   { to: '/settings', label: 'Impostazioni', icon: BarChart3 },
 ]
 

@@ -12,14 +12,12 @@ from app.api.ai import router as ai_router
 from app.api.imports import router as imports_router
 from app.api.settings import router as settings_router
 from app.api.stats import router as stats_router
-from app.api.strava_auth import router as strava_router
 from app.api.sync import router as sync_router
 from app.core.config import get_settings
 
 Next = Callable[[Request], Awaitable[Response]]
 
-AUTH_EXEMPT = {"/healthz", "/api/strava/callback"}
-CSRF_EXEMPT = {"/api/strava/callback"}
+AUTH_EXEMPT = {"/healthz"}
 BINARY_UPLOAD = "/api/imports/file"  # raw file body; still needs X-Corsa (forces CORS preflight)
 MUTATING = {"POST", "PUT", "PATCH", "DELETE"}
 CSP = (
@@ -34,7 +32,7 @@ app = FastAPI()
 
 @app.middleware("http")
 async def csrf(request: Request, call_next: Next) -> Response:
-    if request.method in MUTATING and request.url.path not in CSRF_EXEMPT:
+    if request.method in MUTATING:
         ct = request.headers.get("content-type", "").split(";")[0].strip().lower()
         ok_ct = ct == "application/json" or (
             request.url.path == BINARY_UPLOAD and ct == "application/octet-stream"
@@ -66,7 +64,6 @@ async def security_headers(request: Request, call_next: Next) -> Response:
     return resp
 
 
-app.include_router(strava_router)
 app.include_router(activities_router)
 app.include_router(stats_router)
 app.include_router(sync_router)
