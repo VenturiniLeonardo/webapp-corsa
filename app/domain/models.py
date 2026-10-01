@@ -62,6 +62,9 @@ class Activity(Base):
             "ck_activities_workout_type",
         ),
         CheckConstraint("distance_m >= 0", name="ck_activities_distance_m"),
+        CheckConstraint(
+            "difficulty IS NULL OR difficulty BETWEEN 1 AND 10", name="ck_activities_difficulty"
+        ),
         Index("ix_activities_local_date", "local_date"),
         Index("ix_activities_start_time_utc", "start_time_utc"),
         Index("ix_activities_sport_type_local_date", "sport_type", "local_date"),
@@ -91,6 +94,7 @@ class Activity(Base):
     is_indoor: Mapped[bool | None] = mapped_column(Boolean)
     workout_type: Mapped[str | None] = mapped_column(Text)
     notes: Mapped[str | None] = mapped_column(Text)
+    difficulty: Mapped[int | None] = mapped_column(Integer)  # perceived effort 1-10 (user)
     excluded_from_stats: Mapped[bool] = mapped_column(
         Boolean, server_default=text("0"), default=False
     )

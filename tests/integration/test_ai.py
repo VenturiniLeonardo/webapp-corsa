@@ -6,6 +6,7 @@ import httpx
 import pytest
 import respx
 from fastapi.testclient import TestClient
+from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from app.ai import openrouter, prompts
@@ -14,7 +15,7 @@ from app.api import ai as ai_api
 from app.api import stats
 from app.core.config import get_settings
 from app.core.db import get_session, make_engine
-from app.domain.models import Activity, ActivityMetrics, Base
+from app.domain.models import Activity, ActivityMetrics, AiAnalysis, Base
 
 URL = "https://openrouter.ai/api/v1/chat/completions"
 KEY = "sk-or-SECRET-do-not-leak-123"
@@ -401,3 +402,49 @@ def test_api_period_ok_and_errors(client, engine, models, monkeypatch):
 def test_post_requires_csrf_header(client):
     r = client.post("/api/ai/period", json={}, headers={"X-Corsa": ""})
     assert r.status_code == 403
+
+
+def test_auto_sweep_analyses_only_new_recent_runs(engine, models):
+    from app.worker.queue import JobQueue
+
+    with Session(engine) as s:
+        new = add_run(s, "2026-09-29").id
+        add_run(s, "2026-08-01")  # too old: no backfill spend
+        add_run(s, "2026-09-28", dist=0.0)  # insufficient: never asked
+        s.commit()
+    ai_api.queue_auto_analysis(engine)
+    ai_api.queue_auto_analysis(engine)  # deduped
+    job = JobQueue(engine).claim_job()
+    assert job and job.kind == "ai_sweep" and JobQueue(engine).claim_job() is None
+    m, sent = mocked(models)
+    with m:
+        assert ai_api.run_sweep(engine) is None
+        assert ai_api.run_sweep(engine) is None  # already analysed: no second request
+    assert len(sent) == 1
+    with Session(engine) as s:
+        assert s.scalar(select(AiAnalysis.subject)) == str(new)
+        assert ai_api.pending_activity_ids(s) == []
+
+
+def test_auto_sweep_stops_on_provider_error(engine, models):
+    with Session(engine) as s:
+        add_run(s, "2026-09-29")
+        add_run(s, "2026-09-30")
+        s.commit()
+    with respx.mock:
+        route = respx.post(URL).mock(return_value=httpx.Response(401))
+        assert "provider_auth" in (ai_api.run_sweep(engine) or "")
+    assert route.call_count == 1  # no hammering the rest of the batch
+
+
+def test_force_regenerates_same_input(client, engine, models):
+    with Session(engine) as s:
+        aid = add_run(s, "2026-09-29").id
+        s.commit()
+    m, sent = mocked(models)
+    with m:
+        client.post(f"/api/ai/activity/{aid}", json={})
+        client.post(f"/api/ai/activity/{aid}", json={})  # cached
+        assert len(sent) == 1
+        assert client.post(f"/api/ai/activity/{aid}?force=true", json={}).status_code == 200
+    assert len(sent) == 2

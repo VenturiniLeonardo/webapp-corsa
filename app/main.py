@@ -9,6 +9,7 @@ from starlette.types import Scope
 
 from app.api.activities import router as activities_router
 from app.api.ai import router as ai_router
+from app.api.imports import router as imports_router
 from app.api.settings import router as settings_router
 from app.api.stats import router as stats_router
 from app.api.strava_auth import router as strava_router
@@ -19,6 +20,7 @@ Next = Callable[[Request], Awaitable[Response]]
 
 AUTH_EXEMPT = {"/healthz", "/api/strava/callback"}
 CSRF_EXEMPT = {"/api/strava/callback"}
+BINARY_UPLOAD = "/api/imports/file"  # raw file body; still needs X-Corsa (forces CORS preflight)
 MUTATING = {"POST", "PUT", "PATCH", "DELETE"}
 CSP = (
     "default-src 'self'; script-src 'self'; "
@@ -34,7 +36,10 @@ app = FastAPI()
 async def csrf(request: Request, call_next: Next) -> Response:
     if request.method in MUTATING and request.url.path not in CSRF_EXEMPT:
         ct = request.headers.get("content-type", "").split(";")[0].strip().lower()
-        if ct != "application/json" or request.headers.get("x-corsa") != "1":
+        ok_ct = ct == "application/json" or (
+            request.url.path == BINARY_UPLOAD and ct == "application/octet-stream"
+        )
+        if not ok_ct or request.headers.get("x-corsa") != "1":
             return JSONResponse({"detail": "Forbidden"}, status_code=403)
     return await call_next(request)
 
@@ -67,6 +72,7 @@ app.include_router(stats_router)
 app.include_router(sync_router)
 app.include_router(settings_router)
 app.include_router(ai_router)
+app.include_router(imports_router)
 
 
 @app.get("/healthz")

@@ -1,6 +1,7 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { useEffect, useState } from 'react'
 import { api } from '../api/client'
+import { btn, FB, Fonts, PageHead, Panel } from '../components/ui'
 
 type Settings = {
   hr_max: number | null
@@ -9,7 +10,7 @@ type Settings = {
   steady_cv_threshold: number | null
 }
 
-const field = 'rounded border border-border bg-panel px-2 py-1 text-sm font-mono tabular-nums'
+const field = 'rounded-lg border border-[#262b33] bg-[#111418] px-2.5 py-1 text-sm font-mono tabular-nums text-[#eef1f4]'
 const n = (v: string) => (v.trim() === '' ? null : Number(v))
 
 export default function SettingsPage() {
@@ -64,20 +65,22 @@ export default function SettingsPage() {
 
   return (
     <form
-      className="max-w-xl space-y-6"
+      className="max-w-2xl space-y-4"
+      style={{ fontFamily: FB }}
       onSubmit={(e) => {
         e.preventDefault()
         if (!err) save.mutate()
       }}
     >
-      <h1 className="text-lg">Settings</h1>
+      <Fonts />
+      <PageHead eyebrow="Frequenza cardiaca e soglie" title="Impostazioni" />
       {q.isError && <p className="text-sm text-red-400">Failed to load settings.</p>}
-      <p role="alert" className="rounded border border-amber-500/40 px-3 py-2 text-sm text-amber-400">
+      <p role="alert" className="rounded-[14px] border border-amber-500/40 px-4 py-3 text-sm text-amber-400">
         Modifying HR zones will trigger a background recomputation of all activity metrics.
       </p>
 
-      <section className="space-y-3">
-        <h2 className="text-sm text-neutral-400">Heart rate</h2>
+      <Panel title="Heart rate">
+        <div className="space-y-3">
         <div className="flex flex-wrap gap-4 text-sm">
           <label className="space-y-1">
             <span className="block text-neutral-400">Max HR (bpm)</span>
@@ -104,9 +107,10 @@ export default function SettingsPage() {
         </div>
         <p className="text-xs text-neutral-500">Z5 is everything above Z4.</p>
         {err && <p className="text-sm text-red-400">{err}</p>}
-      </section>
+        </div>
+      </Panel>
 
-      <section className="space-y-2 text-sm">
+      <Panel title="Steady runs" className="text-sm">
         <label className="block text-neutral-400" htmlFor="cv">
           Steady run CV threshold <span className="font-mono tabular-nums text-neutral-200">{cv.toFixed(2)}</span>
         </label>
@@ -117,16 +121,16 @@ export default function SettingsPage() {
           max={0.3}
           step={0.01}
           value={cv}
-          className="w-full accent-blue-500"
+          className="w-full accent-[#4c8dff]"
           onChange={(e) => setCv(Number(e.target.value))}
         />
-      </section>
+      </Panel>
 
       <div className="flex items-center gap-3">
         <button
           type="submit"
           disabled={!!err || save.isPending}
-          className="min-h-10 rounded border border-border bg-panel px-3 py-1 text-sm hover:border-accent disabled:opacity-50 md:min-h-0"
+          className={btn}
         >
           Save
         </button>

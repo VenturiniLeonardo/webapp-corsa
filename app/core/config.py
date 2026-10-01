@@ -32,6 +32,13 @@ class Settings(BaseSettings):
     AI_MAX_WAIT_S: float = 10.0
     AI_DAILY_LIMIT: int = 40  # OpenRouter free: 50/day; margin for manual use
     AI_MINUTE_LIMIT: int = 10  # OpenRouter free: 20/min
+    # Runner profile sent with every AI request (single user, ADR-15). Age/BMI derived, never stored.
+    RUNNER_BIRTH_YEAR: int | None = None
+    RUNNER_HEIGHT_CM: int | None = None
+    RUNNER_WEIGHT_KG: float | None = None
+    RUNNER_SERIOUS_SINCE: str = "2026-01-01"  # earlier runs in the data were occasional
+    RUNNER_RUNS_PER_WEEK: int = 3
+    RUNNER_GYM_PER_WEEK: int = 3
 
     @property
     def ai_models(self) -> list[str]:

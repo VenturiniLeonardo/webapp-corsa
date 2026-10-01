@@ -27,5 +27,5 @@ Personal running analytics platform (FastAPI + SQLite + React/Vite). Dark-only, 
 - **Storage & State:** SQLite in WAL mode (`foreign_keys=ON`, `busy_timeout=5000`). Streams as gzip-compressed JSON blobs in `streams`. Each activity import/recompute is a single atomic transaction.
 - **Job Queue:** SQLite `jobs` table with atomic claims and heartbeat. No Celery/Redis.
 - **Strava Integration:** Self-limit to 90 reads / 15 min, 900 / day. Rotate refresh tokens atomically on every refresh. Base URL must be configurable (migrates to `api-v3.strava.com` by 2027-01-04). Polling every 30m; no webhooks.
-- **Security:** Bind only to `127.0.0.1:8000`. Authenticate via `Tailscale-User-Login` header. Mutating API calls require `Content-Type: application/json` and `X-Corsa: 1`. Zero secrets in git.
+- **Security:** Bind only to `127.0.0.1:8000`. Prod auth = IP allowlist (OCI Security List + UFW on 443) behind Caddy, which injects the `Tailscale-User-Login` header the app checks. Mutating API calls require `Content-Type: application/json` and `X-Corsa: 1`. Zero secrets in git.
 - **UI Guidelines:** Pure dark-only. Semantic colors: Pace=Blue, HR=Red, Elevation=Gray, Cadence=Purple, Power=Amber. All numbers must use `tabular-nums`. Pace Y-axis inverted (faster = higher). Responsive down to 375px.

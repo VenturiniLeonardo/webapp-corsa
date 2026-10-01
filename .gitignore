@@ -13,3 +13,5 @@ playwright-report/
 corsa.db*
 export_data.zip
 *.egg-info/
+
+HealthAutoExport_*.zip

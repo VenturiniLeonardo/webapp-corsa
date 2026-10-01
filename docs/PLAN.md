@@ -58,7 +58,7 @@ Tre scoperte della ricerca cambiano il quadro rispetto alle attese:
 | RNF-03 | Performance | API della dashboard < 300 ms p95 con 1.000 attività; pagina di dettaglio < 1 s |
 | RNF-04 | Affidabilità dei dati | RPO 24 h (backup notturno); RTO < 2 h su una VM nuova seguendo il RUNBOOK |
 | RNF-05 | Idempotenza | Qualsiasi import rieseguito N volte produce lo stesso stato |
-| RNF-06 | Privacy | Nessun dato di attività inviato a terzi, eccetto i backup cifrati e le richieste di tile mappa (§15) |
+| RNF-06 | Privacy | Nessun dato di attività inviato a terzi, eccetto i backup cifrati, le richieste di tile mappa (§15) e le analisi AI richieste esplicitamente (opt-in, solo statistiche aggregate, §26) |
 | RNF-07 | Sicurezza | Nessuna porta applicativa esposta su internet; segreti fuori da git |
 | RNF-08 | Manutenibilità | Un solo linguaggio backend, 2 container, deploy con un comando, test automatici sulle parti rischiose |
 | RNF-09 | Mobile | Usabile a 375 px di larghezza senza scroll orizzontale |
@@ -536,7 +536,7 @@ Selettore globale: **periodo** (4W · 12W · 6M · YTD · 1Y · All · custom) e
 
 | # | Visualizzazione | Cosa mostra | Perché è utile | Dati | Periodo | Problemi di interpretazione |
 |---|-----------------|-------------|----------------|------|---------|-----------------------------|
-| D1 | **Strip riassuntiva** (riga di testo densa, non card) | km, tempo, n° corse, km/settimana medi, corsa più lunga, passo ponderato + Δ sul periodo precedente | Risposta in 2 secondi a "quanto e quanto spesso corro" | activities | Qualsiasi | Periodo corrente parziale contro periodo precedente completo → il Δ usa lo **stesso numero di giorni trascorsi** |
+| D1 | **KPI card** (6 card con Δ colorato: verde = miglioramento, rosso = peggioramento; passo: più basso = meglio) | km, tempo, n° corse, km/settimana medi, corsa più lunga, passo ponderato + Δ sul periodo precedente | Risposta in 2 secondi a "quanto e quanto spesso corro" | activities | Qualsiasi | Periodo corrente parziale contro periodo precedente completo → il Δ usa lo **stesso numero di giorni trascorsi** |
 | D2 | **Volume per settimana/mese** (barre) + **media mobile 4 settimane** (linea); toggle km/tempo/corse/D+ | Andamento del carico grezzo | Mostra costanza, pause, aumenti bruschi (> 10–15%/settimana = rischio infortunio) | activities | ≥ 4W | Il bucket corrente è parziale (barra tratteggiata); i mesi hanno lunghezze diverse |
 | D3 | **Calendario di costanza** (heatmap giornaliera, km) | Giorni corsi e buchi | Frequenza e regolarità a colpo d'occhio | activities | 1Y fisso (scorre) | Nessuno rilevante |
 | D4 | **Corsa lunga settimanale** (linea) + quota della lunga sul volume settimanale | Progressione della resistenza | Metrica chiave per mezza o maratona | activities | ≥ 12W | Settimane senza lunga → valori bassi, non "regressione" |
@@ -1174,6 +1174,69 @@ Copia settimanale via Tailscale sul PC di casa (`restic copy` o rsync, schedulat
 - **M8-08** Filtri salvati · P2
 
 ---
+
+---
+
+## 26. Analisi AI (OpenRouter)
+
+Aggiunta su richiesta esplicita dopo il piano originale. **[DECISIONE]** L'AI **interpreta** numeri già calcolati dall'app; non calcola, non predice, non viene mai chiamata in automatico.
+
+### 26.1 Cosa fa e cosa no
+
+| Funzione | Scelta | Motivo |
+|----------|--------|--------|
+| **Analisi di una corsa** (dettaglio attività) | LLM | Lettura combinata di split, FC, zone, EF, corse simili: è sintesi, non calcolo |
+| **Analisi di un periodo** (dashboard, periodo selezionato vs precedente) | LLM | Mette insieme volume, picchi di carico, trend steady, PR, distribuzione intensità |
+| Medie, trend, Δ periodi, PR, carico, distribuzione | **Deterministico** (già in `/api/stats/*`) | Il codice è esatto e gratuito; l'LLM riceve i risultati |
+| Picchi di carico (> 15 % sulla media 4 settimane), settimane vuote | **Deterministico** (`flags` nel contesto) | Soglia nota (D2); il modello li commenta soltanto |
+| Previsioni (tempo gara, forma) | **Escluse** | Senza modello statistico validato sarebbe un numero inventato; il predittore Riegel resta Could (M8), etichettato `model` |
+| Chat libera "chiedi all'AI" | **Esclusa** | Domande aperte = contesto grande, risposte non verificabili, quota 50/giorno |
+| Riepiloghi periodici automatici | **Esclusi** | Consumerebbero quota senza un'azione dell'utente |
+
+### 26.2 Flusso
+
+```
+GET  /api/ai/{activity/{id} | period?from_date&to_date}  → solo cache + stato (mai il modello)
+POST /api/ai/{activity/{id} | period {from_date,to_date}} →
+  contesto deterministico (riusa get_activity, get_similar, stats.summary/volume/trends/zones/records)
+  → gate "dati sufficienti" (corsa senza distanza/tempo; periodo < 3 corse → 422, nessuna richiesta)
+  → cache per hash(prompt version, catena modelli, soggetto, contesto) → hit = nessuna richiesta
+  → lock di processo (doppio click = 409, non due richieste)
+  → OpenRouter: Ultra → Super → Qwen → errore controllato
+  → estrazione + validazione Pydantic → salvataggio in `ai_analyses` (un risultato per soggetto)
+```
+
+GET restituisce `stale=true` quando dati o prompt sono cambiati dopo l'analisi salvata: l'UI la mostra attenuata con "Re-analyze".
+
+### 26.3 Modelli e fallback
+
+Ordine fisso in `app/core/config.py` (`AI_PRIMARY_MODEL`, `AI_FALLBACK_MODEL_1`, `AI_FALLBACK_MODEL_2`; sovrascrivibili da `.env`): `nvidia/nemotron-3-ultra-550b-a55b:free` → `nvidia/nemotron-3-super-120b-a12b:free` → `qwen/qwen3.8-27b:free`.
+
+- **Fallback al modello successivo**: timeout, errore di rete, 429/5xx dopo i retry, altri 4xx, errore nel body (anche con HTTP 200), body non JSON, risposta vuota, output non estraibile o non conforme allo schema.
+- **Stop immediato senza fallback**: 401 (chiave errata: fallirebbero tutti) e quota locale esaurita.
+- **Retry**: solo su 429/5xx, `AI_MAX_RETRIES=1` per modello, backoff `AI_RETRY_BACKOFF_S·2^n`; se `Retry-After` > `AI_MAX_WAIT_S` si passa subito al modello successivo. Caso peggiore: 6 richieste.
+- Log (`app.ai.openrouter`): modello, status, latenza, motivo del fallback. Mai la chiave, mai il prompt, mai il body del provider.
+
+### 26.4 Quota locale
+
+Ogni richiesta HTTP in uscita (retry inclusi) consuma quota: `AI_DAILY_LIMIT=40` (giorno UTC, persistito in `settings.ai_usage`, sopravvive ai riavvii) e `AI_MINUTE_LIMIT=10` (in memoria). Limiti OpenRouter Free: 50/giorno, 20/minuto. Oltre → 429 `rate_limited` senza chiamare il provider.
+
+### 26.5 Output strutturato e prompt
+
+- Nessuna fiducia in `response_format`: il prompt (`app/ai/prompts.py`) descrive lo schema; il parser rimuove `<think>…</think>`, code fence e prosa, prende l'oggetto `{…}` e lo valida con Pydantic (`Analysis`: `summary`, 1–6 `insights` con `kind` ∈ observation/interpretation/hypothesis + `evidence`, ≤ 4 `caveats`, `data_sufficiency`). Non valido → fallback; mai salvato.
+- Regole del prompt di sistema: solo i dati forniti, niente ricalcoli, ogni insight etichettato e con evidenza, campi mancanti = sconosciuti, nessuna previsione, nessuna diagnosi medica (in caso di valori anomali: suggerire un professionista).
+- Il contesto contiene solo numeri già formattati (passo `m:ss/km`, km, %): **niente nome, note, tag, GPS/polyline, ID, ora del giorno**. Periodi lunghi: serie mensile invece che settimanale (max 26 bucket). Dimensione tipica 1,5–5 KB.
+- `PROMPT_VERSION` fa parte della chiave di cache: incrementarlo invalida tutte le analisi.
+
+### 26.6 Privacy e termini
+
+Dati inviati a OpenRouter e al provider del modello, solo su click. **Rischi residui da valutare**: (1) i modelli `:free` di OpenRouter possono richiedere di consentire nelle impostazioni privacy dell'account il logging/training dei prompt da parte del provider; (2) l'API Agreement Strava contiene clausole sull'uso dei dati in applicazioni AI [NON VERIFICATO: rileggere il testo prima dell'uso]. Senza `OPENROUTER_API_KEY` la funzione è disattivata e nessun dato esce.
+
+### 26.7 Estendere
+
+- **Nuovo modello**: cambiare `AI_*_MODEL*` in `.env` (la catena entra nell'hash: le cache vecchie diventano `stale`). Un quarto modello = una riga in `Settings.ai_models`.
+- **Nuova analisi**: (1) valore in `Kind` e nel CHECK di `ai_analyses` (migrazione); (2) builder di contesto deterministico in `app/api/ai.py` che restituisce `(ctx, motivo_insufficienza)`; (3) testo in `prompts.TASKS`; (4) coppia GET/POST che chiama `_state`/`_generate`; (5) `<AiPanel path=…>` nella pagina.
+
 
 ## Cose che non abbiamo ancora potuto verificare
 

@@ -2,6 +2,8 @@
 
 import hashlib
 import json
+import threading
+from bisect import bisect_right
 from collections.abc import Callable
 from dataclasses import asdict
 from datetime import UTC, datetime, timedelta
@@ -11,6 +13,7 @@ import httpx
 from sqlalchemy import Engine, delete, select
 from sqlalchemy.orm import Session
 
+from app.api.ai import queue_auto_analysis, run_sweep
 from app.api.strava_auth import PROVIDER
 from app.core.config import get_settings
 from app.domain.dedup import (
@@ -35,7 +38,7 @@ from app.domain.stream_codec import decode_stream, encode_stream
 from app.ingest.strava_client import RateLimitWaitException, StravaClient
 from app.ingest.strava_mapper import RUN_SPORTS, LapDraft, StreamDraft, map_strava_activity
 from app.metrics import engine as metrics
-from app.worker.queue import JobQueue
+from app.worker.queue import HEARTBEAT_INTERVAL_S, JobQueue
 
 PAGE = 200
 RECENT_WINDOW = timedelta(days=30)
@@ -111,14 +114,14 @@ def _cfg(s: Session) -> Cfg:
     return v.get("hr_zones") or None, float(v.get("steady_cv_threshold") or 0.08)
 
 
-def _record(s: Session, ext_id: str) -> SourceRecord:
+def _record(s: Session, ext_id: str, source: str = PROVIDER) -> SourceRecord:
     rec = s.scalar(
         select(SourceRecord).where(
-            SourceRecord.source == PROVIDER, SourceRecord.external_id == ext_id
+            SourceRecord.source == source, SourceRecord.external_id == ext_id
         )
     )
     if rec is None:
-        rec = SourceRecord(source=PROVIDER, external_id=ext_id, status="pending")
+        rec = SourceRecord(source=source, external_id=ext_id, status="pending")
         s.add(rec)
         s.flush()
     return rec
@@ -176,7 +179,9 @@ def _compute_metrics(s: Session, act: Activity, ch: dict[str, list[Any]], cfg: C
     s.merge(m)
 
 
-def _dedup(s: Session, start_iso: str, elapsed_s: int, dist_m: float | None) -> Any:
+def _dedup(
+    s: Session, start_iso: str, elapsed_s: int, dist_m: float | None, source: str = PROVIDER
+) -> Any:
     start = datetime.fromisoformat(start_iso)
     lo, hi = (
         _now_iso(start + timedelta(seconds=x)) for x in (-MAX_START_DELTA_S, MAX_START_DELTA_S)
@@ -194,7 +199,56 @@ def _dedup(s: Session, start_iso: str, elapsed_s: int, dist_m: float | None) -> 
         )
         for a in acts
     ]
-    return find_duplicate_candidate(start, elapsed_s, dist_m, cands, PROVIDER)
+    return find_duplicate_candidate(start, elapsed_s, dist_m, cands, source)
+
+
+def _merge_missing(
+    s: Session, act_id: int | None, rec: SourceRecord, draft: Any, stream: StreamDraft | None
+) -> None:
+    """Fill channels the host stream lacks (cadence, hr) from an attached record; nothing else."""
+    host = s.get(Activity, act_id) if act_id else None
+    if host is None or stream is None:
+        return
+    st = s.get(Stream, host.stream_source_id) if host.stream_source_id else None
+    if st is None:  # host has no stream at all: adopt this one
+        host.stream_source_id = rec.id
+        s.flush()
+        s.add(
+            Stream(
+                source_record_id=rec.id,
+                activity_id=host.id,
+                n_points=stream.n_points,
+                channels=",".join(stream.channels),
+                data=encode_stream(stream.channels),
+                codec_version=CODEC_VERSION,
+            )
+        )
+        ch = stream.channels
+    else:
+        ch = decode_stream(st.data)
+        shift = (
+            datetime.fromisoformat(draft.start_time_utc)
+            - datetime.fromisoformat(host.start_time_utc)
+        ).total_seconds()
+        src_t = [x + shift for x in stream.channels["time"]]
+        added = False
+        for name in ("cadence", "hr"):
+            if name in ch or name not in stream.channels or "time" not in ch:
+                continue
+            src = stream.channels[name]
+            out = []
+            for t in ch["time"]:
+                i = bisect_right(src_t, t) - 1
+                out.append(src[i] if 0 <= i and t <= src_t[-1] + 2 else None)
+            ch[name], added = out, True
+        if not added:
+            return
+        st.data, st.channels = encode_stream(ch), ",".join(ch)
+    host.has_cadence = host.has_cadence or "cadence" in ch
+    host.has_hr = host.has_hr or "hr" in ch
+    if host.avg_cadence_spm is None:
+        host.avg_cadence_spm = draft.avg_cadence_spm
+    _compute_metrics(s, host, ch, _cfg(s))
 
 
 class Runner:
@@ -215,6 +269,7 @@ class Runner:
             "strava_sync": self.run_strava_sync,
             "strava_reconcile": self.run_strava_reconcile,
             "recompute": self.run_recompute_metrics,
+            "ai_sweep": self.run_ai_sweep,
         }
         try:
             self.queue.finish_job(job.id, "done", handlers[job.kind](job))
@@ -240,6 +295,7 @@ class Runner:
         window = int((self.now() - RECENT_WINDOW).timestamp())
         after = min(cursor - CURSOR_OVERLAP_S, window) if cursor else None
         err = self._ingest_all(job, self._list(after), retry_errors=False)
+        queue_auto_analysis(self.engine)
         self._touch("last_sync_at")
         self._ping()
         return err
@@ -259,6 +315,18 @@ class Runner:
                 a.upstream_deleted_at = _now_iso(self.now())
                 a.excluded_from_stats = True
         self._touch("last_reconcile_at")
+
+    def run_ai_sweep(self, job: Job) -> str | None:
+        done = threading.Event()  # a model call can outlast STALE_AFTER: keep the heartbeat going
+        threading.Thread(target=self._beat, args=(job.id, done), daemon=True).start()
+        try:
+            return run_sweep(self.engine)
+        finally:
+            done.set()
+
+    def _beat(self, job_id: int, done: threading.Event) -> None:
+        while not done.wait(HEARTBEAT_INTERVAL_S):
+            self.queue.heartbeat(job_id)
 
     def run_recompute_metrics(self, job: Job) -> str | None:
         with Session(self.engine) as s:
@@ -355,8 +423,8 @@ class Runner:
             if acc and (acc.sync_cursor or 0) < epoch:
                 acc.sync_cursor = epoch
 
+    @staticmethod
     def _save_activity(
-        self,
         s: Session,
         rec: SourceRecord,
         draft: Any,
@@ -367,10 +435,12 @@ class Runner:
         if act is not None and act.primary_source_id != rec.id:
             return  # attached record: the primary source owns the summary
         if act is None:
-            action, target = _dedup(s, draft.start_time_utc, draft.elapsed_s or 0, draft.distance_m)
+            action, target = _dedup(
+                s, draft.start_time_utc, draft.elapsed_s or 0, draft.distance_m, rec.source
+            )
             if action == DedupAction.ATTACH_TO_EXISTING:
-                # ponytail: only links; promoting a richer stream to stream_source is M7 (files)
                 rec.activity_id, rec.status = target, "duplicate"
+                _merge_missing(s, target, rec, draft, stream)
                 return
             act = Activity(primary_source_id=rec.id)
             if action == DedupAction.FLAG_DUPLICATE:

@@ -1,13 +1,15 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import * as echarts from 'echarts'
 import type { EChartsOption } from 'echarts'
-import { type ExpressionSpecification, type GeoJSONSource, LngLatBounds, Map as MlMap, Marker } from 'maplibre-gl'
+import { type ExpressionSpecification, type GeoJSONSource, LngLatBounds, Map as MlMap, Marker, setWorkerUrl } from 'maplibre-gl'
 import type { Feature, FeatureCollection } from 'geojson'
 import 'maplibre-gl/dist/maplibre-gl.css'
+import mlWorkerUrl from 'maplibre-gl/dist/maplibre-gl-worker.mjs?worker&url'
 import { type ReactNode, type RefObject, useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { Link, useParams } from 'react-router-dom'
 import { api } from '../api/client'
 import AiPanel from '../components/AiPanel'
+import { field, FB, FC, FM, Fonts, MUTED, pill, surface } from '../components/ui'
 import { formatDate, formatDistance, formatDuration, formatPace } from '../utils/formatters'
 
 // --- API shapes (app/api/activities.py) -------------------------------------
@@ -24,6 +26,7 @@ type Summary = {
 }
 type Activity = Summary & {
   notes: string | null
+  difficulty: number | null
   elapsed_s: number | null
   elev_gain_m: number | null
   elev_loss_m: number | null
@@ -62,14 +65,26 @@ type Similar = Summary & {
 type Ch = 'time' | 'distance' | 'hr' | 'speed' | 'lat' | 'lng' | 'altitude' | 'cadence' | 'power'
 type Streams = Partial<Record<Ch, (number | null)[]>>
 type Settings = { hr_max: number | null; hr_zones: number[] | null }
+type ColorBy = 'pace' | 'hr' | 'power' | 'elev'
+const COLOR_BY: [ColorBy, string, Ch][] = [['pace', 'Pace', 'speed'], ['hr', 'HR', 'hr'], ['power', 'Power', 'power'], ['elev', 'Elevation', 'altitude']]
+
+// maplibre v6 resolves its worker next to its own module; Vite bundles that away, so point it explicitly
+setWorkerUrl(mlWorkerUrl)
 
 const WORKOUTS = ['easy', 'long', 'workout', 'race', 'other']
 const PACE_CLAMP = 600 // 10:00/km
+// map track ramps, dark → bright per metric (pace blue, HR red, power amber, elev gray)
+const RAMPS: Record<ColorBy, string[]> = {
+  pace: ['#1e3a8a', '#2563eb', '#3b82f6', '#60a5fa', '#bfdbfe'],
+  hr: ['#450a0a', '#991b1b', '#dc2626', '#f87171', '#fecaca'],
+  power: ['#451a03', '#92400e', '#d97706', '#fbbf24', '#fef3c7'],
+  elev: ['#27272a', '#52525b', '#71717a', '#a1a1aa', '#e4e4e7'],
+}
+const rampOf = (k: ColorBy) => (k === 'pace' ? RAMPS.pace : [...RAMPS[k]].reverse()) // high/fast = dark, low/slow = light (pace axis is s/km, so lo = fast)
 const ZONE_COLORS = ['#3f1d1d', '#7f1d1d', '#b91c1c', '#ef4444', '#fca5a5'] // sequential, not rainbow
-const C = { pace: '#3b82f6', hr: '#ef4444', elev: '#6b7280', cad: '#a855f7', pow: '#f59e0b', grid: '#22222a', text: '#a3a3a3' }
+const C = { pace: '#4c8dff', hr: '#ef4444', elev: '#6b7280', cad: '#a855f7', pow: '#f59e0b', grid: '#22222a', text: '#a3a3a3' }
 const EFFORTS: [number, string][] = [[400, '400m'], [1000, '1k'], [1609.34, '1mi'], [5000, '5k'], [10000, '10k'], [21097.5, '21.1k'], [42195, '42.2k']]
 const mono = 'font-mono tabular-nums'
-const field = 'rounded border border-border bg-panel px-2 py-1 text-sm'
 const GROUP = 'activity'
 
 // --- helpers ----------------------------------------------------------------
@@ -126,7 +141,7 @@ export default function ActivityDetailPage() {
   })
 
   const [xMode, setXMode] = useState<'distance' | 'time'>('distance')
-  const [colorBy, setColorBy] = useState<'pace' | 'hr'>('pace')
+  const [colorBy, setColorBy] = useState<ColorBy>('pace')
   const [hoverSplit, setHoverSplit] = useState<number | null>(null)
   const cursor = useRef<((i: number | null) => void) | null>(null)
 
@@ -180,11 +195,14 @@ export default function ActivityDetailPage() {
   }
 
   return (
-    <div className="space-y-8">
+    <div className="space-y-4" style={{ fontFamily: FB }}>
+      <Fonts />
       {/* 1. header */}
       <header className="flex flex-wrap items-center gap-x-3 gap-y-2">
-        <h1 className="text-lg text-neutral-100">{a.name ?? '—'}</h1>
-        <span className={`text-sm text-neutral-400 ${mono}`}>{formatDate(a.start_time_utc, tz)}</span>
+        <div className="mr-auto min-w-0">
+          <div className="text-xs tracking-[.08em] uppercase" style={{ fontFamily: FM, color: MUTED }}>{formatDate(a.start_time_utc, tz)}</div>
+          <h1 className="mt-1 text-[44px] leading-none font-bold tracking-[.01em] text-[#eef1f4] uppercase" style={{ fontFamily: FC }}>{a.name ?? '—'}</h1>
+        </div>
         <select
           aria-label="Workout type"
           className={`${field} min-h-10 md:min-h-0`}
@@ -196,17 +214,30 @@ export default function ActivityDetailPage() {
             <option key={w}>{w}</option>
           ))}
         </select>
+        <select
+          aria-label="Difficulty"
+          className={`${field} min-h-10 md:min-h-0 tabular-nums`}
+          value={a.difficulty ?? ''}
+          onChange={(e) => patch.mutate({ difficulty: e.target.value ? Number(e.target.value) : null })}
+        >
+          <option value="">difficoltà —</option>
+          {Array.from({ length: 10 }, (_, i) => i + 1).map((n) => (
+            <option key={n} value={n}>
+              difficoltà {n}/10
+            </option>
+          ))}
+        </select>
         <label className="flex items-center gap-1 text-xs text-neutral-400">
           <input type="checkbox" checked={a.excluded_from_stats} onChange={(e) => patch.mutate({ excluded_from_stats: e.target.checked })} />
           exclude from stats
         </label>
         {d.sources.map((s) => (
-          <span key={s.id} className="rounded border border-border px-1 text-xs text-neutral-400" title={s.source}>
+          <span key={s.id} className="rounded-full bg-[#20252c] px-2 text-xs text-neutral-300" title={s.source}>
             {s.source === 'strava' ? 'Strava' : s.source.replace('file_', '').toUpperCase()}
           </span>
         ))}
         {strava && (
-          <a href={`https://www.strava.com/activities/${strava.external_id}`} target="_blank" rel="noreferrer" className="text-sm text-accent hover:underline">
+          <a href={`https://www.strava.com/activities/${strava.external_id}`} target="_blank" rel="noreferrer" className="text-sm text-[#4c8dff] hover:underline">
             View on Strava
           </a>
         )}
@@ -214,7 +245,7 @@ export default function ActivityDetailPage() {
       </header>
 
       {/* 2. stats */}
-      <section className="grid grid-cols-2 gap-x-6 gap-y-4 lg:grid-cols-4">
+      <section className={`${surface} grid grid-cols-2 gap-x-6 gap-y-4 lg:grid-cols-4`}>
         <Group title="Time / distance">
           <Stat label="Distance" value={a.distance_m != null ? formatDistance(a.distance_m) : '—'} delta={delta(a.distance_m, sim.map((s) => s.distance_m), (x) => `${(x / 1000).toFixed(2)} km`)} />
           <Stat label="Moving" value={a.moving_s != null ? formatDuration(a.moving_s) : '—'} delta={delta(a.moving_s, sim.map((s) => s.moving_s), formatDuration)} />
@@ -241,29 +272,31 @@ export default function ActivityDetailPage() {
 
       {/* 3. map | splits */}
       <section className="grid gap-4 xl:grid-cols-[3fr_2fr]">
-        <div className="space-y-1">
+        <div className={`${surface} space-y-2`}>
           <div className="flex gap-1 text-xs">
-            {(['pace', 'hr'] as const).map((k) => (
-              <button key={k} aria-pressed={colorBy === k} onClick={() => setColorBy(k)} className={`${field} min-h-10 md:min-h-0 ${colorBy === k ? 'border-accent text-accent' : 'text-neutral-400'}`}>
-                {k === 'pace' ? 'Pace' : 'HR'}
+            {COLOR_BY.filter(([, , ch]) => has(st?.[ch])).map(([k, label]) => (
+              <button key={k} aria-pressed={colorBy === k} onClick={() => setColorBy(k)} className={pill(colorBy === k)}>
+                {label}
               </button>
             ))}
           </div>
           {has(st?.lat) && has(st?.lng) ? (
             <TrackMap st={st!} colorBy={colorBy} cursor={cursor} />
           ) : (
-            <p className="flex h-60 items-center justify-center border border-border text-sm text-neutral-500">{streams.isPending ? 'Loading…' : 'No GPS track'}</p>
+            <p className="flex h-60 items-center justify-center rounded-lg border border-dashed border-[#262b33] text-sm text-neutral-500">{streams.isPending ? 'Loading…' : 'No GPS track'}</p>
           )}
         </div>
-        <Splits splits={d.splits} hl={hoverSplit} />
+        <div className={surface}>
+          <Splits splits={d.splits} hl={hoverSplit} />
+        </div>
       </section>
 
       {/* 4. charts */}
       {series && st && (
-        <section className="space-y-2">
+        <section className={`${surface} space-y-2`}>
           <div className="flex gap-1 text-xs">
             {(['distance', 'time'] as const).map((k) => (
-              <button key={k} aria-pressed={series.mode === k} onClick={() => setXMode(k)} className={`${field} min-h-10 md:min-h-0 ${series.mode === k ? 'border-accent text-accent' : 'text-neutral-400'}`}>
+              <button key={k} aria-pressed={series.mode === k} onClick={() => setXMode(k)} className={pill(series.mode === k)}>
                 {k === 'distance' ? 'Distance' : 'Time'}
               </button>
             ))}
@@ -275,7 +308,9 @@ export default function ActivityDetailPage() {
       {/* 5. zones */}
       {d.metrics?.time_in_zones_s && <Zones secs={d.metrics.time_in_zones_s} />}
 
-      <AiPanel path={`/api/ai/activity/${id}`} />
+      <div className={surface}>
+        <AiPanel path={`/api/ai/activity/${id}`} />
+      </div>
 
       {/* 6. best efforts */}
       {d.best_efforts.length > 0 && (
@@ -283,11 +318,11 @@ export default function ActivityDetailPage() {
           <table className="w-full max-w-md text-sm">
             <tbody className={mono}>
               {d.best_efforts.map((b) => (
-                <tr key={b.distance_m} className="border-b border-border">
+                <tr key={b.distance_m} className="border-b border-[#262b33]">
                   <td className="py-1 pr-3 font-sans text-neutral-400">{effortLabel(b.distance_m)}</td>
                   <td className="pr-3 text-right">{clock(b.elapsed_s)}</td>
                   <td className="pr-3 text-right text-neutral-400">{formatPace((b.elapsed_s * 1000) / b.distance_m)}</td>
-                  <td className="w-10">{b.is_pr && <span className="rounded-sm border border-accent px-1 text-xs text-accent">PR</span>}</td>
+                  <td className="w-10">{b.is_pr && <span className="rounded-sm border border-accent px-1 text-xs text-[#4c8dff]">PR</span>}</td>
                 </tr>
               ))}
             </tbody>
@@ -300,7 +335,7 @@ export default function ActivityDetailPage() {
         <Section title="Similar runs">
           <div className="overflow-x-auto">
             <table className="w-full text-sm">
-              <thead className="border-b border-border text-left text-xs text-neutral-400">
+              <thead className="border-b border-[#262b33] text-left text-xs text-neutral-400">
                 <tr>
                   {['Date', 'Name', 'Dist', 'Pace', 'Δ', 'HR', 'Δ', 'EF', 'Δ'].map((h, i) => (
                     <th key={i} className={`py-1 pr-3 font-normal ${i > 1 ? 'text-right' : ''}`}>{h}</th>
@@ -309,10 +344,10 @@ export default function ActivityDetailPage() {
               </thead>
               <tbody className={mono}>
                 {sim.map((s) => (
-                  <tr key={s.id} className="border-b border-border">
+                  <tr key={s.id} className="border-b border-[#262b33]">
                     <td className="py-1 pr-3 whitespace-nowrap">{formatDate(s.start_time_utc, s.timezone ?? 'UTC').slice(0, 11)}</td>
                     <td className="max-w-48 truncate pr-3 font-sans">
-                      <Link to={`/activities/${s.id}`} className="hover:text-accent">{s.name ?? '—'}</Link>
+                      <Link to={`/activities/${s.id}`} className="hover:text-[#4c8dff]">{s.name ?? '—'}</Link>
                     </td>
                     <td className="pr-3 text-right">{s.distance_m != null ? formatDistance(s.distance_m) : '—'}</td>
                     <td className="pr-3 text-right">{formatPace(s.pace_s_per_km)}</td>
@@ -341,7 +376,7 @@ export default function ActivityDetailPage() {
       <Editor key={a.id} notes={a.notes ?? ''} tags={d.tags} save={patch.mutate} />
 
       {/* 10. sources */}
-      <details className="border-t border-border pt-2 text-sm">
+      <details className={`${surface} text-sm`}>
         <summary className="cursor-pointer text-neutral-400">Sources &amp; raw data</summary>
         <div className="mt-2 space-y-3 overflow-x-auto">
           <table className="text-xs">
@@ -369,11 +404,11 @@ export default function ActivityDetailPage() {
             <p className="text-xs text-neutral-400">
               Duplicate candidates:{' '}
               {d.duplicate_candidates.map((c) => (
-                <Link key={c.id} to={`/activities/${c.id}`} className="mr-2 text-accent">#{c.id}</Link>
+                <Link key={c.id} to={`/activities/${c.id}`} className="mr-2 text-[#4c8dff]">#{c.id}</Link>
               ))}
             </p>
           )}
-          <pre className={`max-h-96 overflow-auto border border-border bg-panel p-2 text-xs ${mono}`}>{JSON.stringify(d, null, 2)}</pre>
+          <pre className={`max-h-96 overflow-auto rounded-lg border border-[#262b33] bg-[#111418] p-2 text-xs ${mono}`}>{JSON.stringify(d, null, 2)}</pre>
         </div>
       </details>
     </div>
@@ -383,8 +418,8 @@ export default function ActivityDetailPage() {
 // --- pieces -----------------------------------------------------------------
 function Section({ title, children }: { title: string; children: ReactNode }) {
   return (
-    <section className="space-y-2">
-      <h2 className="text-xs tracking-wide text-neutral-500 uppercase">{title}</h2>
+    <section className={`${surface} space-y-2`}>
+      <h2 className="text-[22px] font-semibold tracking-[.02em] text-[#eef1f4] uppercase" style={{ fontFamily: FC }}>{title}</h2>
       {children}
     </section>
   )
@@ -393,7 +428,7 @@ function Section({ title, children }: { title: string; children: ReactNode }) {
 function Group({ title, children }: { title: string; children: ReactNode }) {
   return (
     <div>
-      <h2 className="mb-1 text-xs tracking-wide text-neutral-500 uppercase">{title}</h2>
+      <h2 className="mb-1 text-[11px] tracking-[.07em] uppercase" style={{ fontFamily: FM, color: MUTED }}>{title}</h2>
       <dl className="space-y-0.5">{children}</dl>
     </div>
   )
@@ -430,7 +465,7 @@ function Splits({ splits, hl, bare }: { splits: Lap[]; hl: number | null; bare?:
   return (
     <div className={bare ? '' : 'max-h-[440px] overflow-y-auto'}>
       <table className="w-full text-sm">
-        <thead className="sticky top-0 border-b border-border bg-bg text-left text-xs text-neutral-400">
+        <thead className="sticky top-0 border-b border-[#262b33] bg-[#191d23] text-left text-xs text-neutral-400">
           <tr>
             <th className="py-1 pr-2 font-normal">{bare ? 'Lap' : 'Km'}</th>
             <th className="pr-2 text-right font-normal">Pace</th>
@@ -445,7 +480,7 @@ function Splits({ splits, hl, bare }: { splits: Lap[]; hl: number | null; bare?:
             const dev = p != null && avg != null ? p - avg : 0
             const w = `${(Math.abs(dev) / maxDev) * 50}%`
             return (
-              <tr key={s.idx} ref={i === hl ? hlRef : undefined} className={`border-b border-border ${i === hl ? 'bg-panel text-neutral-100' : ''}`}>
+              <tr key={s.idx} ref={i === hl ? hlRef : undefined} className={`border-b border-[#262b33] ${i === hl ? 'bg-[#20252c] text-neutral-100' : ''}`}>
                 <td className="py-1 pr-2 text-neutral-400">
                   {i + 1}
                   {s.distance_m != null && s.distance_m < 950 && <span className="text-xs text-neutral-500"> ({(s.distance_m / 1000).toFixed(2)})</span>}
@@ -521,23 +556,42 @@ function Editor({ notes: n0, tags: t0, save }: { notes: string; tags: string[]; 
 }
 
 // --- map --------------------------------------------------------------------
-function TrackMap({ st, colorBy, cursor }: { st: Streams; colorBy: 'pace' | 'hr'; cursor: RefObject<((i: number | null) => void) | null> }) {
+function TrackMap({ st, colorBy, cursor }: { st: Streams; colorBy: ColorBy; cursor: RefObject<((i: number | null) => void) | null> }) {
   const el = useRef<HTMLDivElement>(null)
   const map = useRef<MlMap | null>(null)
 
   const data = useMemo(() => {
     const lat = st.lat!
     const lng = st.lng!
-    const pace = (st.speed ?? []).map((v) => (v ? Math.min(1000 / v, PACE_CLAMP) : null))
-    const hr = st.hr ?? []
+    // centred moving average: raw 1 Hz samples make the track flicker between hues
+    const smooth = (xs: (number | null)[] = [], w = 7) =>
+      xs.map((_, i) => {
+        const win = xs.slice(Math.max(0, i - w), i + w + 1).filter((x): x is number => x != null)
+        return win.length ? win.reduce((a, b) => a + b, 0) / win.length : null
+      })
+    const vals: Record<ColorBy, (number | null)[]> = {
+      pace: smooth(st.speed).map((v) => (v ? Math.min(1000 / v, PACE_CLAMP) : null)),
+      hr: smooth(st.hr),
+      power: smooth(st.power),
+      elev: smooth(st.altitude),
+    }
     const pt = (i: number) => (lat[i] != null && lng[i] != null ? [lng[i]!, lat[i]!] : null)
     const feats: Feature[] = []
     for (let i = 1; i < lat.length; i++) {
       const p0 = pt(i - 1)
       const p1 = pt(i)
-      if (p0 && p1) feats.push({ type: 'Feature', properties: { pace: pace[i], hr: hr[i] }, geometry: { type: 'LineString', coordinates: [p0, p1] } })
+      if (p0 && p1) feats.push({ type: 'Feature', properties: { pace: vals.pace[i], hr: vals.hr[i], power: vals.power[i], elev: vals.elev[i] }, geometry: { type: 'LineString', coordinates: [p0, p1] } })
     }
     const pts = lat.map((_, i) => pt(i)).filter((p): p is number[] => !!p)
+    // first GPS point at or past each whole km
+    const km: Feature[] = []
+    const dist = st.distance ?? []
+    for (let i = 0, next = 1000; i < dist.length; i++) {
+      const p = pt(i)
+      if (dist[i] == null || dist[i]! < next || !p) continue
+      km.push({ type: 'Feature', properties: { km: String(next / 1000) }, geometry: { type: 'Point', coordinates: p } })
+      next = (Math.floor(dist[i]! / 1000) + 1) * 1000
+    }
     const range = (xs: (number | null)[]) => {
       const v = xs.filter((x): x is number => x != null)
       return v.length ? [pct(v, 0.05), Math.max(pct(v, 0.95), pct(v, 0.05) + 1)] : [0, 1]
@@ -551,17 +605,18 @@ function TrackMap({ st, colorBy, cursor }: { st: Streams; colorBy: 'pace' | 'hr'
           { type: 'Feature', properties: { k: 'end' }, geometry: { type: 'Point', coordinates: pts[pts.length - 1] } },
         ],
       } as FeatureCollection,
+      km: { type: 'FeatureCollection', features: km } as FeatureCollection,
       pts,
-      ranges: { pace: range(pace), hr: range(hr) },
+      ranges: { pace: range(vals.pace), hr: range(vals.hr), power: range(vals.power), elev: range(vals.elev) },
     }
   }, [st])
 
   const color = useCallback(
-    (k: 'pace' | 'hr'): ExpressionSpecification => {
+    (k: ColorBy): ExpressionSpecification => {
       const [lo, hi] = data.ranges[k]
-      // pace: faster (lower) = brighter blue; HR: higher = brighter red
-      const [a, b] = k === 'pace' ? [C.pace, '#1e293b'] : ['#3f1d1d', C.hr]
-      return ['interpolate', ['linear'], ['coalesce', ['get', k], lo], lo, a, hi, b]
+      const ramp = rampOf(k)
+      const stops = ramp.flatMap((c, i) => [lo + ((hi - lo) * i) / (ramp.length - 1), c])
+      return ['interpolate', ['linear'], ['coalesce', ['get', k], lo], ...stops] as ExpressionSpecification
     },
     [data],
   )
@@ -576,6 +631,15 @@ function TrackMap({ st, colorBy, cursor }: { st: Streams; colorBy: 'pace' | 'hr'
     m.on('load', () => {
       m.addSource('track', { type: 'geojson', data: data.track })
       m.addLayer({ id: 'track', type: 'line', source: 'track', layout: { 'line-cap': 'round', 'line-join': 'round' }, paint: { 'line-width': 3, 'line-color': color(colorBy) } })
+      m.addSource('km', { type: 'geojson', data: data.km })
+      m.addLayer({ id: 'km', type: 'circle', source: 'km', paint: { 'circle-radius': 8, 'circle-color': '#0a0a0c', 'circle-stroke-color': '#e5e5e5', 'circle-stroke-width': 1.5 } })
+      m.addLayer({
+        id: 'km-label',
+        type: 'symbol',
+        source: 'km',
+        layout: { 'text-field': ['get', 'km'], 'text-font': ['Noto Sans Regular'], 'text-size': 10, 'text-allow-overlap': true },
+        paint: { 'text-color': '#e5e5e5' },
+      })
       m.addSource('ends', { type: 'geojson', data: data.ends })
       m.addLayer({
         id: 'ends',
@@ -616,9 +680,24 @@ function TrackMap({ st, colorBy, cursor }: { st: Streams; colorBy: 'pace' | 'hr'
   // keep the source in sync if streams refetch without remount
   useEffect(() => {
     ;(map.current?.getSource('track') as GeoJSONSource | undefined)?.setData(data.track)
+    ;(map.current?.getSource('km') as GeoJSONSource | undefined)?.setData(data.km)
   }, [data])
 
-  return <div ref={el} className="h-60 w-full border border-border xl:h-[420px]" />
+  const [lo, hi] = data.ranges[colorBy]
+  const fmt = { pace: formatPace, hr: (v: number) => `${Math.round(v)} bpm`, power: (v: number) => `${Math.round(v)} W`, elev: (v: number) => `${Math.round(v)} m` }[colorBy]
+  const ramp = rampOf(colorBy)
+  return (
+    <div className="relative">
+      <div ref={el} className="h-60 w-full overflow-hidden rounded-lg xl:h-[420px]" />
+      <div className="pointer-events-none absolute top-2 left-2 rounded bg-neutral-950/80 px-2 py-1 text-[10px] text-neutral-300 tabular-nums">
+        <div className="h-1.5 w-32 rounded" style={{ background: `linear-gradient(to right, ${ramp.join(',')})` }} />
+        <div className="mt-0.5 flex justify-between">
+          <span>{fmt(lo)}</span>
+          <span>{fmt(hi)}</span>
+        </div>
+      </div>
+    </div>
+  )
 }
 
 // --- charts -----------------------------------------------------------------
@@ -731,6 +810,8 @@ function Chart({ option, onHover }: { option: EChartsOption; onHover: (v: number
     c.on('updateAxisPointer', h)
     c.getZr().on('globalout', out)
     return () => {
+      // the init effect's cleanup runs first on unmount and disposes the chart
+      if (c.isDisposed()) return
       c.off('updateAxisPointer', h)
       c.getZr().off('globalout', out)
     }

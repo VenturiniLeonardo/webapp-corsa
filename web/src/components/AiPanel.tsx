@@ -33,13 +33,13 @@ export default function AiPanel({ path, body = {} }: { path: string; body?: obje
   const qs = new URLSearchParams(Object.entries(body).filter(([, v]) => v) as [string, string][])
   const state = useQuery({ queryKey: key, queryFn: () => api<AiState>(`${path}${qs.size ? `?${qs}` : ''}`) })
   const run = useMutation({
-    mutationFn: () => api<AiState>(path, { method: 'POST', body: JSON.stringify(body) }),
+    mutationFn: () => api<AiState>(`${path}${state.data?.result ? '?force=true' : ''}`, { method: 'POST', body: JSON.stringify(body) }),
     onSuccess: (d) => qc.setQueryData(key, d),
   })
   const s = state.data
-  if (!s) return null
+  if (!s?.enabled) return null
   const r = s.result
-  const canRun = s.enabled && !s.insufficient && !run.isPending && (!r || s.stale)
+  const canRun = s.enabled && !s.insufficient && !run.isPending
 
   return (
     <section className="space-y-2">
@@ -76,20 +76,17 @@ export default function AiPanel({ path, body = {} }: { path: string; body?: obje
       )}
 
       <div className="flex flex-wrap items-center gap-3 text-sm">
-        {(!r || s.stale) && (
-          <button
-            onClick={() => run.mutate()}
-            disabled={!canRun}
-            className="min-h-10 rounded border border-border bg-panel px-3 py-1 text-accent disabled:text-neutral-600 md:min-h-0"
-          >
-            {run.isPending ? 'Analyzing…' : r ? 'Re-analyze' : 'Analyze with AI'}
-          </button>
-        )}
+        <button
+          onClick={() => run.mutate()}
+          disabled={!canRun}
+          className="min-h-10 rounded border border-border bg-panel px-3 py-1 text-accent disabled:text-neutral-600 md:min-h-0"
+        >
+          {run.isPending ? 'Analyzing…' : r ? 'Re-analyze' : 'Analyze with AI'}
+        </button>
         {run.isPending && <span className="text-xs text-neutral-500">can take up to a minute</span>}
         {s.insufficient && <span className="text-xs text-neutral-500">Not enough data: {s.insufficient}</span>}
-        {!s.enabled && <span className="text-xs text-neutral-500">{ERR.not_configured}</span>}
         {run.isError && <span className="text-xs text-red-400">{errorText(run.error)}</span>}
-        {s.enabled && (!r || s.stale) && (
+        {(
           <span className="ml-auto text-xs text-neutral-600 tabular-nums" title="Requests sent to the AI provider today (local budget)">
             {s.used_today}/{s.daily_limit} today
           </span>

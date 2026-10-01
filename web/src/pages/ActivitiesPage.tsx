@@ -2,6 +2,7 @@ import { keepPreviousData, useQuery } from '@tanstack/react-query'
 import { useEffect, useState } from 'react'
 import { Link, useNavigate, useSearchParams } from 'react-router-dom'
 import { api } from '../api/client'
+import { field, FB, FM, Fonts, PageHead, pill, surface, btnGhost } from '../components/ui'
 import { formatDate, formatDistance, formatDuration, formatPace } from '../utils/formatters'
 import { PRESETS, presetFrom } from '../utils/period'
 
@@ -47,7 +48,6 @@ const num = (v: string | null, k = 1) => (v && Number.isFinite(Number(v)) ? Numb
 
 const hm = (s: number) => `${Math.floor(s / 3600)}h ${String(Math.floor((s % 3600) / 60)).padStart(2, '0')}m`
 const pace = (a: Activity) => (a.moving_s && a.distance_m ? (a.moving_s * 1000) / a.distance_m : null)
-const field = 'rounded border border-border bg-panel px-2 py-1 text-sm'
 const mono = 'font-mono tabular-nums'
 
 export default function ActivitiesPage() {
@@ -128,7 +128,7 @@ export default function ActivitiesPage() {
             key={o}
             aria-pressed={on}
             onClick={() => set({ [k]: on ? sp.getAll(k).filter((x) => x !== o) : [...sp.getAll(k), o] })}
-            className={`${field} min-h-10 md:min-h-0 ${on ? 'border-accent text-accent' : 'text-neutral-400'}`}
+            className={pill(on)}
           >
             {o.replace('_', ' ')}
           </button>
@@ -141,7 +141,10 @@ export default function ActivitiesPage() {
   const pages = data ? Math.max(1, Math.ceil(data.total / PAGE_SIZE)) : 1
 
   return (
-    <div className="space-y-3">
+    <div className="space-y-4" style={{ fontFamily: FB }}>
+      <Fonts />
+      <PageHead eyebrow="Tutti gli allenamenti" title="Allenamenti" />
+      <div className={`${surface} space-y-3`}>
       <div className="flex flex-wrap items-center gap-2">
         <div className="flex gap-1">
           {PRESETS.map((p) => (
@@ -149,7 +152,7 @@ export default function ActivitiesPage() {
               key={p}
               aria-pressed={preset === p}
               onClick={() => set({ r: p === 'All' ? null : p, from: null, to: null })}
-              className={`${field} min-h-10 md:min-h-0 ${preset === p ? 'border-accent text-accent' : 'text-neutral-400'}`}
+              className={pill(preset === p)}
             >
               {p}
             </button>
@@ -168,8 +171,9 @@ export default function ActivitiesPage() {
         {multi('type', SPORTS)}
         {multi('wt', WORKOUTS)}
       </div>
+      </div>
 
-      <p className={`text-sm text-neutral-300 ${mono} ${isFetching ? 'opacity-60' : ''}`}>
+      <p className={`text-sm text-[#eef1f4] ${mono} ${isFetching ? 'opacity-60' : ''}`}>
         {agg
           ? `${agg.count} runs · ${(agg.distance_m / 1000).toFixed(1)} km · ${hm(agg.moving_s)} · ${formatPace(agg.weighted_pace_s_per_km)}`
           : '…'}
@@ -180,9 +184,9 @@ export default function ActivitiesPage() {
       {data?.items.length === 0 && <p className="text-sm text-neutral-500">No activities match.</p>}
 
       {data && data.items.length > 0 && (
-        <>
+        <div className={surface}>
           <table className="hidden w-full text-sm md:table">
-            <thead className="border-b border-border text-left text-xs text-neutral-400">
+            <thead className="border-b border-[#262b33] text-left text-[11px] tracking-[.07em] text-[#8a93a0] uppercase" style={{ fontFamily: FM }}>
               <tr>
                 {COLS.map(([s, label, right]) => (
                   <th key={s} className={`py-1 pr-3 font-normal ${right ? 'text-right' : ''}`} aria-sort={sort === s ? (order === 'asc' ? 'ascending' : 'descending') : undefined}>
@@ -197,7 +201,7 @@ export default function ActivitiesPage() {
             </thead>
             <tbody className={mono}>
               {data.items.map((a) => (
-                <tr key={a.id} onClick={() => nav(`/activities/${a.id}`)} className="cursor-pointer border-b border-border hover:bg-panel">
+                <tr key={a.id} onClick={() => nav(`/activities/${a.id}`)} className={`cursor-pointer border-b hover:bg-[#20252c] ${a.workout_type === 'race' ? 'border-red-500/40 bg-red-500/10' : 'border-[#262b33]'}`}>
                   <td className="py-1 pr-3 whitespace-nowrap">{formatDate(a.start_time_utc, a.timezone ?? 'UTC')}</td>
                   <td className="max-w-64 truncate pr-3 font-sans">
                     <Link to={`/activities/${a.id}`} className="hover:text-accent" onClick={(e) => e.stopPropagation()}>
@@ -218,7 +222,7 @@ export default function ActivitiesPage() {
 
           <ul className="md:hidden">
             {data.items.map((a) => (
-              <li key={a.id} className="border-b border-border">
+              <li key={a.id} className={`border-b ${a.workout_type === 'race' ? 'border-red-500/40 bg-red-500/10' : 'border-[#262b33]'}`}>
                 <Link to={`/activities/${a.id}`} className="block min-h-11 py-2">
                   <div className="flex justify-between gap-2">
                     <span className="truncate">{a.name ?? '—'}</span>
@@ -240,18 +244,18 @@ export default function ActivitiesPage() {
             ))}
           </ul>
 
-          <div className={`flex items-center justify-between text-sm text-neutral-400 ${mono}`}>
-            <button disabled={page <= 1} onClick={() => set({ page: String(page - 1) }, true)} className={`${field} min-h-10 disabled:opacity-40`}>
+          <div className={`mt-3 flex items-center justify-between text-sm text-neutral-400 ${mono}`}>
+            <button disabled={page <= 1} onClick={() => set({ page: String(page - 1) }, true)} className={btnGhost}>
               Prev
             </button>
             <span>
               {page} / {pages} · {data.total}
             </span>
-            <button disabled={page >= pages} onClick={() => set({ page: String(page + 1) }, true)} className={`${field} min-h-10 disabled:opacity-40`}>
+            <button disabled={page >= pages} onClick={() => set({ page: String(page + 1) }, true)} className={btnGhost}>
               Next
             </button>
           </div>
-        </>
+        </div>
       )}
     </div>
   )

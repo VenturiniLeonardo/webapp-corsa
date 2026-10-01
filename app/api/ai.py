@@ -7,13 +7,15 @@ Context sent to the model: numbers and dates only. No name, notes, tags, GPS, id
 
 import hashlib
 import json
+import logging
 import threading
-from datetime import date
+from datetime import date, timedelta
 from typing import Any, Literal, cast
 
 from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel
 from sqlalchemy import Engine, delete, func, select
+from sqlalchemy.orm import Session
 
 from app.ai.openrouter import AiError, OpenRouter, usage_today
 from app.ai.prompts import PROMPT_VERSION, Analysis, build_messages
@@ -21,11 +23,15 @@ from app.api import stats
 from app.api.activities import Db, get_activity, get_similar
 from app.core.config import get_settings
 from app.domain.models import Activity, AiAnalysis
+from app.worker.queue import JobQueue
 
+log = logging.getLogger(__name__)
 router = APIRouter(prefix="/api/ai")
 Kind = Literal["activity", "period"]
 MIN_PERIOD_RUNS = 3
 MAX_SPLITS = 50
+AUTO_DAYS = 7  # new-activity auto analysis only looks this far back (no backfill spend)
+AUTO_BATCH = 5
 MAX_SERIES = 26  # buckets sent to the model; longer periods switch to months
 LOAD_SPIKE = 1.15  # PLAN D2: > 10-15 %/week jumps
 LOAD_BASE_KM = 5.0  # ignore spikes from a near-zero base
@@ -78,6 +84,59 @@ def _clean(d: Any) -> Any:
 
 
 # --- context builders ------------------------------------------------------------------
+def runner_profile(s: Db, today: date) -> dict[str, Any]:
+    """Who the model is talking about: configured body/schedule + history derived from the data."""
+    cfg = get_settings()
+    since = date.fromisoformat(cfg.RUNNER_SERIOUS_SINCE)
+    w12 = today - timedelta(weeks=12)
+
+    def agg(frm: date) -> tuple[int, float]:
+        n, m = s.execute(
+            select(func.count(), func.coalesce(func.sum(Activity.distance_m), 0)).where(
+                *stats.Scope(frm, today, None, False).where()
+            )
+        ).one()
+        return n, (m or 0) / 1000
+
+    runs, km = agg(since)
+    n12, km12 = agg(max(w12, since))
+    weeks12 = max(1.0, (today - max(w12, since)).days / 7)
+    first = s.scalar(select(func.min(Activity.local_date)))
+    max_hr = s.scalar(
+        select(func.max(Activity.max_hr)).where(Activity.local_date >= since.isoformat())
+    )
+    h = cfg.RUNNER_HEIGHT_CM / 100
+    return cast(
+        dict[str, Any],
+        _clean(
+            {
+                "sex": "male",
+                "age": today.year - cfg.RUNNER_BIRTH_YEAR,
+                "height_cm": cfg.RUNNER_HEIGHT_CM,
+                "weight_kg": cfg.RUNNER_WEIGHT_KG,
+                "bmi": _r(cfg.RUNNER_WEIGHT_KG / h**2),
+                "weekly_schedule": {
+                    "runs": cfg.RUNNER_RUNS_PER_WEEK,
+                    "gym_strength_sessions": cfg.RUNNER_GYM_PER_WEEK,
+                },
+                "serious_running_since": since.isoformat(),
+                "training_age_months": round((today - since).days / 30.4),
+                "occasional_runs_before_that_since": first
+                if first and first < since.isoformat()
+                else None,
+                "runs_since_serious": runs,
+                "km_since_serious": _r(km, 0),
+                "last_12_weeks": {
+                    "runs_per_week": _r(n12 / weeks12),
+                    "km_per_week": _r(km12 / weeks12),
+                },
+                "max_hr_seen_bpm": _r(max_hr, 0),
+                "notes": "gym sessions are not tracked in the data; max_hr_seen is not a tested max",
+            }
+        ),
+    )
+
+
 def activity_context(s: Db, aid: int) -> tuple[dict[str, Any], str | None]:
     d = get_activity(aid, s)
     a, m = d.activity, d.metrics
@@ -86,6 +145,7 @@ def activity_context(s: Db, aid: int) -> tuple[dict[str, Any], str | None]:
     zones = (m.time_in_zones_s if m else None) or []
     zt = sum(zones)
     ctx = {
+        "runner": runner_profile(s, date.fromisoformat(a.local_date)),
         "date": a.local_date,
         "type": a.sport_type,
         "workout_type": a.workout_type,
@@ -212,6 +272,7 @@ def period_context(s: Db, frm: date, to: date) -> tuple[dict[str, Any], str | No
         if frm.isoformat() <= e.local_date <= to.isoformat()
     ]
     ctx = {
+        "runner": runner_profile(s, to),
         "period": {"from": frm.isoformat(), "to": to.isoformat(), "days": summ.period.days},
         "current": tot(cur),
         "previous_equal_length": tot(prev),
@@ -260,11 +321,15 @@ def _state(s: Db, kind: Kind, subject: str, ctx: dict[str, Any], why: str | None
     )
 
 
-def _generate(s: Db, kind: Kind, subject: str, ctx: dict[str, Any], why: str | None) -> AiState:
+def _generate(
+    s: Db, kind: Kind, subject: str, ctx: dict[str, Any], why: str | None, force: bool = False
+) -> AiState:
     if why:
         raise _err(422, "insufficient_data", why)
     h = _hash(subject, ctx)
-    if s.scalar(select(AiAnalysis.id).where(AiAnalysis.kind == kind, AiAnalysis.input_hash == h)):
+    if not force and s.scalar(
+        select(AiAnalysis.id).where(AiAnalysis.kind == kind, AiAnalysis.input_hash == h)
+    ):
         return _state(s, kind, subject, ctx, None)  # same data, same prompt: no request
     if not _busy.acquire(blocking=False):
         raise _err(409, "busy", "An AI analysis is already running.")
@@ -293,8 +358,8 @@ def get_activity_analysis(aid: int, s: Db) -> AiState:
 
 
 @router.post("/activity/{aid}")
-def analyse_activity(aid: int, s: Db) -> AiState:
-    return _generate(s, "activity", str(aid), *activity_context(s, aid))
+def analyse_activity(aid: int, s: Db, force: bool = False) -> AiState:
+    return _generate(s, "activity", str(aid), *activity_context(s, aid), force=force)
 
 
 @router.get("/period")
@@ -306,6 +371,50 @@ def get_period_analysis(
 
 
 @router.post("/period")
-def analyse_period(body: PeriodIn, s: Db) -> AiState:
+def analyse_period(body: PeriodIn, s: Db, force: bool = False) -> AiState:
     frm, to = _period_bounds(s, body)
-    return _generate(s, "period", f"{frm}..{to}", *period_context(s, frm, to))
+    return _generate(s, "period", f"{frm}..{to}", *period_context(s, frm, to), force=force)
+
+
+# --- automatic analysis of new activities (queued by import endpoints / sync, run by the worker) ---
+def pending_activity_ids(s: Session) -> list[int]:
+    """Recent runs with distance and time but no stored analysis, newest first."""
+    since = (stats._today() - timedelta(days=AUTO_DAYS)).isoformat()
+    done = set(s.scalars(select(AiAnalysis.subject).where(AiAnalysis.kind == "activity")))
+    ids = s.scalars(
+        select(Activity.id)
+        .where(
+            Activity.local_date >= since,
+            Activity.excluded_from_stats.is_(False),
+            Activity.duplicate_of_id.is_(None),
+            Activity.distance_m > 0,
+            Activity.moving_s > 0,
+        )
+        .order_by(Activity.start_time_utc.desc())
+    )
+    return [i for i in ids if str(i) not in done][:AUTO_BATCH]
+
+
+def queue_auto_analysis(engine: Engine) -> None:
+    """Enqueue one sweep job if AI is on and something is waiting. Never raises into the caller."""
+    try:
+        if not get_settings().OPENROUTER_API_KEY:
+            return
+        with Session(engine) as s:
+            if pending_activity_ids(s):
+                JobQueue(engine).enqueue("ai_sweep", {})
+    except Exception:
+        log.warning("ai: could not queue auto analysis", exc_info=True)
+
+
+def run_sweep(engine: Engine) -> str | None:
+    """Analyse pending activities; stops at the first provider/quota failure (retried next sync)."""
+    with Session(engine) as s:
+        ids = pending_activity_ids(s)
+    for aid in ids:
+        with Session(engine) as s:
+            try:
+                _generate(s, "activity", str(aid), *activity_context(s, aid))
+            except HTTPException as e:
+                return f"activity {aid}: {cast(dict[str, str], e.detail)['code']}"
+    return None

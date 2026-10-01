@@ -7,7 +7,7 @@ from datetime import date
 from typing import Annotated, Any, Literal
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Response
-from pydantic import BaseModel, ConfigDict, StringConstraints
+from pydantic import BaseModel, ConfigDict, Field, StringConstraints
 from sqlalchemy import ColumnElement, SQLColumnExpression, delete, func, or_, select
 from sqlalchemy.orm import Session
 
@@ -73,6 +73,7 @@ class ActivitySummary(_Out):
 
 class ActivityOut(ActivitySummary):
     notes: str | None
+    difficulty: int | None
     elev_loss_m: float | None
     max_hr: float | None
     avg_cadence_spm: float | None
@@ -178,6 +179,7 @@ class ActivityPatch(BaseModel):
     model_config = ConfigDict(extra="forbid")
     notes: str | None = None
     workout_type: WorkoutType | None = None
+    difficulty: Annotated[int, Field(ge=1, le=10)] | None = None
     tags: list[
         Annotated[str, StringConstraints(strip_whitespace=True, min_length=1, max_length=50)]
     ] = []

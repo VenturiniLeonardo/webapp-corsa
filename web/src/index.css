@@ -1,7 +1,7 @@
 @import "tailwindcss";
 
 @theme {
-  --color-bg: #0a0a0c;
+  --color-bg: #111418;
   --color-panel: #121216;
   --color-border: #22222a;
   --color-accent: #3b82f6;
@@ -22,4 +22,5 @@ body {
   --color-elevation: #6b7280;
   --color-cadence: #a855f7;
   --color-power: #f59e0b;
+  --color-volume: #10b981;
 }

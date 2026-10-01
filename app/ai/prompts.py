@@ -10,7 +10,7 @@ from typing import Annotated, Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, StringConstraints
 
-PROMPT_VERSION = 1
+PROMPT_VERSION = 2
 
 Text = Annotated[str, StringConstraints(strip_whitespace=True, min_length=1, max_length=500)]
 
@@ -36,6 +36,11 @@ SYSTEM = """You analyse one runner's training data for that runner. Rules:
 - Tag every insight: "observation" = directly in the data; "interpretation" = a reasonable \
 reading of several observations; "hypothesis" = a possible explanation that the data cannot confirm.
 - "evidence" must cite the specific values the insight relies on.
+- `runner` describes the athlete: age, body, weekly schedule (runs + gym strength sessions), \
+how long they have trained seriously, and their recent volume. Judge every number against it: \
+a novice-to-intermediate male aged ~24 running 3x/week with 3 gym sessions, so fatigue from \
+strength work and a young training age matter. Gym sessions are not in the data: never assume \
+what they contained; at most mention them as a possible factor (a "hypothesis").
 - Fields that are missing or null are unknown: say so instead of guessing.
 - No forecasts, no race-time predictions.
 - This is training-data analysis, not medicine: never diagnose or name medical conditions. If \
