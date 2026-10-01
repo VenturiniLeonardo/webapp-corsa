@@ -103,6 +103,8 @@ def _compute_metrics(s: Session, act: Activity, ch: dict[str, list[Any]], cfg: C
     s.execute(delete(Lap).where(Lap.activity_id == act.id, Lap.kind == "split_km"))
     s.execute(delete(BestEffort).where(BestEffort.activity_id == act.id))
     t, d, hr, speed = (ch.get(k) for k in ("time", "distance", "hr", "speed"))
+    if d:
+        d = metrics.scale_distance_stream(d, act.distance_m)
     m = ActivityMetrics(
         activity_id=act.id,
         algo_version=metrics.ALGO_VERSION,

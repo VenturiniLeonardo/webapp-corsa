@@ -167,3 +167,11 @@ def test_gps_suspect() -> None:
     assert detect_gps_suspect([3.0] + [8.0] * 11 + [3.0]) is False  # exactly 10 s
     assert detect_gps_suspect([8.0, 8.0], [0.0, 11.0]) is True  # sparse sampling
     assert detect_gps_suspect([]) is False
+
+
+def test_scale_distance_stream_stretches_to_summary_only_when_longer() -> None:
+    from app.metrics.engine import scale_distance_stream
+
+    assert scale_distance_stream([0, 10, 20], 40) == [0, 20, 40]
+    assert scale_distance_stream([0, 10, 20], 15) == [0, 10, 20]
+    assert scale_distance_stream([0, 10, 20], None) == [0, 10, 20]
