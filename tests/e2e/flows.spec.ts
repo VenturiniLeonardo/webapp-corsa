@@ -4,7 +4,8 @@ test('1. dashboard loads and period change updates the volume chart', async ({ p
   const errors: string[] = []
   page.on('pageerror', (e) => errors.push(e.message))
   await page.goto('/')
-  const chart = page.locator('section', { has: page.getByRole('heading', { name: 'Volume' }) }).locator('canvas')
+  // weekly volume is now an HTML/SVG panel (no canvas): bars carry a "<date> · N km" title
+  const chart = page.locator('article', { has: page.getByRole('heading', { name: 'Volume settimanale' }) }).locator('[title$=" km"]').first()
   await expect(chart).toBeVisible()
 
   const reload = page.waitForResponse((r) => r.url().includes('/api/stats/volume') && r.url().includes('from_date'))
