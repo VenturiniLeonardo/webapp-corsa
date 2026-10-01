@@ -8,6 +8,7 @@ import mlWorkerUrl from 'maplibre-gl/dist/maplibre-gl-worker.mjs?worker&url'
 import { type ReactNode, type RefObject, useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { Link, useParams } from 'react-router-dom'
 import { api } from '../api/client'
+import ActivityReport from '../components/ActivityReport'
 import AiPanel from '../components/AiPanel'
 import { field, FB, FC, FM, Fonts, MUTED, pill, surface } from '../components/ui'
 import { formatDate, formatDistance, formatDuration, formatPace } from '../utils/formatters'
@@ -36,8 +37,11 @@ type Activity = Summary & {
   calories_kcal: number | null
   excluded_from_stats: boolean
 }
-type Lap = {
+export type Lap = {
   idx: number
+  start_offset_s: number | null
+  max_hr: number | null
+  avg_cadence_spm: number | null
   distance_m: number | null
   moving_s: number | null
   elapsed_s: number | null
@@ -45,9 +49,9 @@ type Lap = {
   avg_hr: number | null
   elev_gain_m: number | null
 }
-type Detail = {
+export type Detail = {
   activity: Activity
-  metrics: { efficiency_factor: number | null; time_in_zones_s: number[] | null } | null
+  metrics: { efficiency_factor: number | null; time_in_zones_s: number[] | null; decoupling_pct: number | null; pace_cv: number | null; is_steady: boolean | null; trimp: number | null; gps_suspect: boolean | null } | null
   laps: Lap[]
   splits: Lap[]
   best_efforts: { distance_m: number; elapsed_s: number; is_pr: boolean }[]
@@ -55,7 +59,7 @@ type Detail = {
   tags: string[]
   duplicate_candidates: Summary[]
 }
-type Similar = Summary & {
+export type Similar = Summary & {
   pace_s_per_km: number | null
   efficiency_factor: number | null
   pace_delta_s_per_km: number | null
@@ -63,8 +67,8 @@ type Similar = Summary & {
   ef_delta: number | null
 }
 type Ch = 'time' | 'distance' | 'hr' | 'speed' | 'lat' | 'lng' | 'altitude' | 'cadence' | 'power'
-type Streams = Partial<Record<Ch, (number | null)[]>>
-type Settings = { hr_max: number | null; hr_zones: number[] | null }
+export type Streams = Partial<Record<Ch, (number | null)[]>>
+export type Settings = { hr_max: number | null; hr_zones: number[] | null }
 type ColorBy = 'pace' | 'hr' | 'power' | 'elev'
 const COLOR_BY: [ColorBy, string, Ch][] = [['pace', 'Pace', 'speed'], ['hr', 'HR', 'hr'], ['power', 'Power', 'power'], ['elev', 'Elevation', 'altitude']]
 
@@ -375,7 +379,10 @@ export default function ActivityDetailPage() {
       {/* 9. notes & tags */}
       <Editor key={a.id} notes={a.notes ?? ''} tags={d.tags} save={patch.mutate} />
 
-      {/* 10. sources */}
+      {/* 10. AI report */}
+      <ActivityReport detail={d} streams={st} settings={settings.data} similar={sim} ready={!streams.isPending && !similar.isPending} />
+
+      {/* 11. sources */}
       <details className={`${surface} text-sm`}>
         <summary className="cursor-pointer text-neutral-400">Sources &amp; raw data</summary>
         <div className="mt-2 space-y-3 overflow-x-auto">
