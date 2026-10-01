@@ -76,7 +76,8 @@ const COLOR_BY: [ColorBy, string, Ch][] = [['pace', 'Pace', 'speed'], ['hr', 'HR
 setWorkerUrl(mlWorkerUrl)
 
 const WORKOUTS = ['easy', 'long', 'workout', 'race', 'other']
-const PACE_CLAMP = 600 // 10:00/km
+const PACE_CLAMP = 600 // 10:00/km (map colours)
+const CHART_PACE_MAX = 720 // 12:00/km: slow tail of the pace chart
 // map track ramps, dark → bright per metric (pace blue, HR red, power amber, elev gray)
 const RAMPS: Record<ColorBy, string[]> = {
   pace: ['#1e3a8a', '#2563eb', '#3b82f6', '#60a5fa', '#bfdbfe'],
@@ -164,7 +165,7 @@ export default function ActivityDetailPage() {
     if (!st?.time?.length) return null
     const mode: Series['mode'] = xMode === 'distance' && has(st.distance) ? 'distance' : 'time'
     const x = mode === 'distance' ? fillForward(st.distance!).map((d) => d / 1000) : fillForward(st.time)
-    const pace = (st.speed ?? []).map((v) => (v == null ? null : v > 0 ? Math.min(1000 / v, PACE_CLAMP) : PACE_CLAMP))
+    const pace = (st.speed ?? []).map((v) => (v == null ? null : v > 0 ? Math.min(1000 / v, CHART_PACE_MAX) : CHART_PACE_MAX))
     return { mode, x, pace, dist: st.distance ? fillForward(st.distance) : null }
   }, [st, xMode])
 
@@ -784,7 +785,7 @@ function Charts({ st, series, settings, onHover }: { st: Streams; series: Series
     })
 
     const out: [string, EChartsOption][] = []
-    if (has(series.pace)) out.push(['pace', mk('Pace', series.pace, C.pace, (v) => formatPace(v).replace(' /km', ''), { inverse: true, max: PACE_CLAMP + 15 })])
+    if (has(series.pace)) out.push(['pace', mk('Pace', series.pace, C.pace, (v) => formatPace(v).replace(' /km', ''), { inverse: true, max: CHART_PACE_MAX + 15 })])
     if (has(st.hr)) {
       const z = settings?.hr_zones
       const hrs = st.hr!.filter((v): v is number => v != null)
