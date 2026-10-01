@@ -38,11 +38,8 @@ export default function Shell() {
       <header className="sticky top-0 z-10 border-b border-[#262b33] bg-[#111418]">
         <div className="mx-auto flex h-16 max-w-7xl items-center gap-6 px-4 md:px-8">
           <NavLink to="/" className="flex items-center gap-2.5 text-[#eef1f4]">
-            <svg width="28" height="28" viewBox="0 0 28 28" fill="none" aria-hidden="true">
-              <rect width="28" height="28" rx="7" fill="#4c8dff" />
-              <path d="M28 9a19 19 0 0 0-19 19M28 15a13 13 0 0 0-13 13M28 21a7 7 0 0 0-7 7" stroke="#111418" strokeWidth="2" />
-            </svg>
-            <span className="text-[22px] font-bold tracking-[.02em] uppercase" style={{ fontFamily: FC }}>Diario di Corsa</span>
+            <img src="/favicon.svg" width={28} height={28} alt="" />
+            <span className="text-[22px] font-bold tracking-[.02em] uppercase" style={{ fontFamily: FC }}>Cadence</span>
           </NavLink>
           <nav className="ml-auto hidden gap-1 text-[15px] font-medium md:flex">
             {links.map((l) => (
