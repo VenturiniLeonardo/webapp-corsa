@@ -246,16 +246,17 @@ def test_reconcile_marks_upstream_deletions_without_deleting(engine, q, runner):
 def test_sync_cursor_window_changed_summary_and_ping(engine, q, runner, monkeypatch):
     monkeypatch.setenv("HEALTHCHECK_URL_SYNC", "https://hc.example/ping")
     get_settings.cache_clear()
+    recent = (datetime.now(UTC) - timedelta(days=10)).strftime("%Y-%m-%dT%H:%M:%SZ")
     ping = respx.get("https://hc.example/ping").respond(200)
-    lst = respx.get(f"{BASE}/athlete/activities").respond(200, json=[summary(1)])
-    mock_activity(1)
+    lst = respx.get(f"{BASE}/athlete/activities").respond(200, json=[summary(1, start=recent)])
+    mock_activity(1, start=recent)
     run_job(q, runner, "strava_backfill")
     assert not ping.called
 
     # Title edited upstream: summary changed -> detail refetched and activity updated.
-    lst.respond(200, json=[{**summary(1), "name": "Renamed"}])
+    lst.respond(200, json=[{**summary(1, start=recent), "name": "Renamed"}])
     detail_route = respx.get(f"{BASE}/activities/1").respond(
-        200, json={**detail(1), "name": "Renamed"}
+        200, json={**detail(1, start=recent), "name": "Renamed"}
     )
     before = detail_route.call_count  # respx reuses the route: includes the backfill call
     jid = run_job(q, runner, "strava_sync")
