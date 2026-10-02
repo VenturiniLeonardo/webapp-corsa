@@ -10,7 +10,7 @@ from fastapi import APIRouter
 from fastapi.responses import PlainTextResponse
 from sqlalchemy.orm import Session
 
-from app.api.activities import Db, LapOut, get_activity, get_similar
+from app.api.activities import Db, LapOut, get_activity
 from app.api.settings import _read
 from app.domain.models import Stream
 from app.domain.stream_codec import decode_stream
@@ -73,7 +73,7 @@ def _summary(xs: list[float]) -> str:
 
 
 def build_report(s: Session, aid: int) -> str:
-    d, sim, cfg = get_activity(aid, s), get_similar(aid, s), _read(s)
+    d, cfg = get_activity(aid, s), _read(s)
     a, m = d.activity, d.metrics
     tz = a.timezone or "UTC"
     sid = a.stream_source_id or a.primary_source_id
@@ -102,10 +102,6 @@ def build_report(s: Session, aid: int) -> str:
 
     L += [
         "# RUNNING ACTIVITY REPORT",
-        (
-            "Units: distance km/m, time h:mm:ss, pace min:sec per km, HR bpm, cadence steps/min "
-            '(spm). "n/a" = not recorded.'
-        ),
         (
             "Tags: (measured) = sensor, (calc) = derived by math, (est.) = estimated by "
             "provider/app, (model) = model output."
@@ -254,31 +250,6 @@ def build_report(s: Session, aid: int) -> str:
     table("KM SPLITS (last split may be shorter than 1 km)", d.splits)
     if d.laps and len(d.laps) != len(d.splits):
         table("DEVICE LAPS", d.laps)
-
-    if d.best_efforts:
-        sec("BEST EFFORTS WITHIN THIS RUN")
-        for b in d.best_efforts:
-            pr = " PERSONAL RECORD at the time" if b.is_pr else ""
-            L.append(
-                f"{_km(b.distance_m)} km: {_hms(b.elapsed_s)} "
-                f"({_pace(b.elapsed_s * 1000 / b.distance_m)}){pr}"
-            )
-
-    if sim:
-        sec("COMPARISON WITH SIMILAR RECENT RUNS (delta = this run minus that run)")
-        L.append("date | dist_km | pace | pace_delta_s | avg_hr | hr_delta | EF | EF_delta")
-        for r in sim:
-            row = [
-                _date(r.start_time_utc, r.timezone or "UTC")[:11],
-                _km(r.distance_m),
-                _pace(r.pace_s_per_km),
-                _n(r.pace_delta_s_per_km),
-                _n(r.avg_hr),
-                _n(r.hr_delta_bpm),
-                _n(r.efficiency_factor, 2),
-                _n(r.ef_delta, 2),
-            ]
-            L.append(" | ".join(row))
     return "\n".join(L)
 
 
