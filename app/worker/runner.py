@@ -27,6 +27,7 @@ from app.domain.models import (
     Job,
     Lap,
     Setting,
+    Shoe,
     SourceRecord,
     Stream,
     utcnow_iso,
@@ -348,6 +349,9 @@ class Runner:
                 act.duplicate_of_id, act.excluded_from_stats = target, True
             for f in ACTIVITY_FIELDS:
                 setattr(act, f, getattr(draft, f))
+            act.shoe_id = s.scalar(
+                select(Shoe.id).where(Shoe.is_default.is_(True), Shoe.retired_at.is_(None))
+            )
             s.add(act)
         else:
             for f in ACTIVITY_FIELDS:

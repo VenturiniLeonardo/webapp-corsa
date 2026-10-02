@@ -18,6 +18,7 @@ from app.domain.models import (
     ActivityTag,
     BestEffort,
     Lap,
+    Shoe,
     SourceRecord,
     Stream,
     Tag,
@@ -87,6 +88,7 @@ class ActivityOut(ActivitySummary):
     primary_source_id: int | None
     stream_source_id: int | None
     summary_polyline: str | None
+    shoe_id: int | None
     weather_temp_c: float | None
     weather_dew_point_c: float | None
     upstream_deleted_at: str | None
@@ -192,6 +194,7 @@ class ActivityPatch(BaseModel):
     notes: str | None = None
     workout_type: WorkoutType | None = None
     difficulty: Annotated[int, Field(ge=1, le=10)] | None = None
+    shoe_id: int | None = None
     tags: list[
         Annotated[str, StringConstraints(strip_whitespace=True, min_length=1, max_length=50)]
     ] = []
@@ -261,6 +264,7 @@ def list_activities(
     workout_type: Annotated[list[WorkoutType] | None, Query(alias="workout_type[]")] = None,
     tag: Annotated[list[str] | None, Query(alias="tag[]")] = None,
     source: Annotated[list[SourceName] | None, Query(alias="source[]")] = None,
+    shoe_id: int | None = None,
     q: str | None = None,
     include_excluded: bool = False,
     sort: Literal["date", "name", "type", "distance", "duration", "pace", "hr", "elev"] = "date",
@@ -301,6 +305,8 @@ def list_activities(
         )
     if source:
         w.append(A.id.in_(select(SourceRecord.activity_id).where(SourceRecord.source.in_(source))))
+    if shoe_id is not None:
+        w.append(A.shoe_id == shoe_id)
     if q:
         w.append(or_(A.name.icontains(q, autoescape=True), A.notes.icontains(q, autoescape=True)))
 
@@ -447,6 +453,8 @@ def get_similar(aid: int, s: Db) -> list[SimilarRun]:
 def patch_activity(aid: int, body: ActivityPatch, s: Db) -> ActivityOut:
     act = _get(s, aid)
     sent = body.model_fields_set
+    if body.shoe_id is not None and s.get(Shoe, body.shoe_id) is None:
+        raise HTTPException(422, "unknown shoe_id")
     for f in sent - {"tags"}:
         setattr(act, f, getattr(body, f))
     if "tags" in sent:

@@ -48,6 +48,7 @@ type Fitness = {
   alerts: { level: 'info' | 'warn' | 'high'; code: string; message: string }[]
   phase: 'load1' | 'load2' | 'load3' | 'deload' | 'race_week' | 'post_race' | null
 }
+type LoadHistory = { points: { date: string; load: number; ctl: number; atl: number; tsb: number }[] }
 type CadenceBands = {
   n: number
   bands: { lo: number | null; hi: number | null; n: number; median_spm: number | null; trend: { slope_per_day: number } | null }[]
@@ -131,12 +132,13 @@ export default function DashboardPage() {
   const hrRef = useQuery(q<Trends>('/api/stats/trends', { metric: 'hr_ref' }))
   const decoupling = useQuery(q<Trends>('/api/stats/trends', { metric: 'decoupling' }))
   const cadence = useQuery(q<CadenceBands>('/api/stats/cadence-bands'))
-  const settings = useQuery({ queryKey: ['settings'], queryFn: () => api<{ ref_pace_s_per_km: number | null }>('/api/settings') })
+  const settings = useQuery({ queryKey: ['settings'], queryFn: () => api<{ ref_pace_s_per_km: number | null; races: string[] | null }>('/api/settings') })
   const paceHr = useQuery(q<PaceHr>('/api/stats/pace-hr'))
   const zones = useQuery(q<Zones>('/api/stats/zones', { bucket: 'week' }))
   const dist = useQuery(q<Dist>('/api/stats/distribution', { field: 'distance' }))
   const top = useQuery(q<TopWeek[]>('/api/stats/top-weeks', { limit: '10' }))
   const fitness = useQuery({ queryKey: ['/api/stats/fitness'], queryFn: () => api<Fitness>('/api/stats/fitness') })
+  const loadHistory = useQuery(q<LoadHistory>('/api/stats/load-history'))
   const records = useQuery({ queryKey: ['/api/records'], queryFn: () => api<RecordRow[]>('/api/records') })
 
   const subtitle = custom ? `${from ?? '…'} → ${to ?? 'today'}` : PRESET_LABEL[preset]
@@ -175,10 +177,11 @@ export default function DashboardPage() {
         <MonthlyPace months={monthly.data?.items} />
         <LengthChart data={dist.data} longest={summary.data?.current.longest_run_m} />
       </section>
-      <Consistency from={from} to={to} />
+      <WeekdayKm from={from} to={to} />
 
       <Alerts data={fitness.data} />
       <FitnessIndices data={fitness.data} />
+      <PmcChart data={loadHistory.data} races={settings.data?.races ?? []} />
       <Group title="Fitness">
         <PaceChart data={pace.data} gap={gap.data} />
         <EfChart data={ef.data} adj={efAdj.data} />
@@ -495,16 +498,10 @@ function LengthChart({ data, longest }: { data?: Dist; longest?: number }) {
   )
 }
 
-const CAL = ['#20252c', '#2a4f96', '#3366cc', '#4c8dff', '#86b0ff', '#c2d6ff']
-const TH = [0, 0.1, 6, 9, 13, 18]
-const calLevel = (k: number) => {
-  for (let q = TH.length - 1; q > 0; q--) if (k >= TH[q]) return q
-  return 0
-}
 const parse = (d: string) => new Date(+d.slice(0, 4), +d.slice(5, 7) - 1, +d.slice(8, 10))
 
 // Calendar API is per-year: window is the period clamped to the last 52 weeks
-function Consistency({ from, to }: { from?: string; to?: string }) {
+function WeekdayKm({ from, to }: { from?: string; to?: string }) {
   const end = to ? parse(to) : new Date()
   const floor = new Date(end.getFullYear(), end.getMonth(), end.getDate() - 364)
   const start = from && parse(from) > floor ? parse(from) : floor
@@ -513,59 +510,16 @@ function Consistency({ from, to }: { from?: string; to?: string }) {
     queryKey: ['calendar', years],
     queryFn: () => Promise.all(years.map((y) => api<Calendar>(`/api/stats/calendar?year=${y}`))),
   })
-  const byDay = new Map<string, number>()
-  cal.data?.forEach((c) => c.days.forEach((d) => byDay.set(d.date, km(d.distance_m))))
-  const mon = new Date(start)
-  mon.setDate(mon.getDate() - ((mon.getDay() + 6) % 7))
-  const weeks: { m: string; days: (number | null)[] }[] = []
   const dow = [0, 0, 0, 0, 0, 0, 0]
-  let active = 0
-  let total = 0
-  let lm = -1
-  for (const w = new Date(mon); w <= end; w.setDate(w.getDate() + 7)) {
-    const days = Array.from({ length: 7 }, (_, g) => {
-      const d = new Date(w.getFullYear(), w.getMonth(), w.getDate() + g)
-      if (d < start || d > end) return null
-      const v = byDay.get(iso(d)) ?? 0
-      total++
-      if (v) active++
-      dow[g] += v
-      return v
-    })
-    weeks.push({ m: w.getMonth() !== lm ? MESI[w.getMonth()] : '', days })
-    lm = w.getMonth()
-  }
+  cal.data?.forEach((c) =>
+    c.days.forEach((d) => {
+      const t = parse(d.date)
+      if (t >= start && t <= end) dow[(t.getDay() + 6) % 7] += km(d.distance_m)
+    }),
+  )
   const dM = Math.max(1, ...dow)
   return (
     <section className="flex flex-wrap gap-4">
-      <Panel
-        flex="2 1 560px"
-        title="Costanza"
-        sub={`Km al giorno · ${active} giorni di corsa su ${total}`}
-        aside={
-          <div className="flex items-center gap-1 text-xs" style={{ color: MUTED }}>
-            riposo {CAL.map((c) => <span key={c} className="h-3 w-3 rounded-[3px]" style={{ background: c }} />)} 18+ km
-          </div>
-        }
-      >
-        {cal.data ? (
-          <div className="mt-4 flex gap-1.5">
-            <div className="flex w-[26px] flex-col gap-[3px] pt-[18px] text-[10px]" style={{ fontFamily: FM, color: MUTED }}>
-              {GG.map((g, i) => <span key={g} className="flex flex-1 items-center">{i % 2 ? '' : g}</span>)}
-            </div>
-            <div className="flex min-w-0 flex-1 gap-[3px]">
-              {weeks.map((w, i) => (
-                <div key={i} className="flex min-w-0 flex-1 flex-col gap-[3px]">
-                  <span className="h-[15px] overflow-visible text-[10px] whitespace-nowrap" style={{ fontFamily: FM, color: MUTED }}>{w.m}</span>
-                  {w.days.map((v, g) => <div key={g} className="aspect-square w-full rounded-[3px]" style={v == null ? undefined : { background: CAL[calLevel(v)] }} title={v == null ? undefined : `${it(v, 1)} km`} />)}
-                </div>
-              ))}
-            </div>
-          </div>
-        ) : (
-          <NoData h={150} />
-        )}
-      </Panel>
       <Panel flex="1 1 300px" title="Giorni della settimana" sub="Km totali per giorno">
         <div className="mt-4 flex flex-col gap-2">
           {dow.map((v, j) => (
@@ -657,6 +611,76 @@ function FitnessIndices({ data }: { data?: Fitness }) {
         ))}
       </div>
     </section>
+  )
+}
+
+// --- PMC ---------------------------------------------------------------------
+const TSB_LOW = -25
+function PmcChart({ data, races }: { data?: LoadHistory; races: string[] }) {
+  const pts = data?.points ?? []
+  const first = pts[0]?.date
+  const last = pts.at(-1)?.date
+  const inRange = races.filter((r) => first && last && r >= first && r <= last)
+  const option: EChartsOption = {
+    ...base,
+    legend: { top: 0, right: 0, textStyle: { color: C.text }, itemWidth: 14, itemHeight: 2 },
+    grid: { ...base.grid, top: 32 },
+    xAxis: timeAxis,
+    yAxis: [
+      { type: 'value', splitLine, name: 'carico', nameTextStyle: { color: C.text } },
+      { type: 'value', splitLine: { show: false }, name: 'TSB', nameTextStyle: { color: C.text } },
+    ],
+    visualMap: {
+      show: false,
+      seriesIndex: 2,
+      dimension: 1,
+      pieces: [{ gt: 0, color: '#3fbf6a' }, { lte: 0, gte: TSB_LOW, color: C.text }, { lt: TSB_LOW, color: '#f97316' }],
+    },
+    series: [
+      {
+        name: 'CTL',
+        type: 'line',
+        showSymbol: false,
+        data: pts.map((p) => [p.date, p.ctl]),
+        lineStyle: { color: C.pace, width: 2.5 },
+        itemStyle: { color: C.pace },
+        markLine: inRange.length
+          ? {
+              symbol: 'none',
+              lineStyle: { color: '#f59e0b', type: 'solid', width: 1 },
+              label: { formatter: 'gara', color: '#f59e0b', position: 'insideEndTop' },
+              data: inRange.map((r) => ({ xAxis: r })),
+            }
+          : undefined,
+      },
+      { name: 'ATL', type: 'line', showSymbol: false, data: pts.map((p) => [p.date, p.atl]), lineStyle: { color: C.hr, width: 1.5, type: 'dashed' }, itemStyle: { color: C.hr } },
+      { name: 'TSB', type: 'line', yAxisIndex: 1, showSymbol: false, data: pts.map((p) => [p.date, p.tsb]), lineStyle: { width: 1 }, areaStyle: { opacity: 0.15 } },
+    ],
+  }
+  return (
+    <Card
+      title="Forma e fatica (PMC)"
+      help="Banister giorno per giorno sul TRIMP di Edwards. CTL (blu) = carico cronico τ 42 gg, ATL (rosso, tratteggiato) = carico acuto τ 7 gg, TSB (area, asse destro) = CTL − ATL: verde sopra 0 (fresco), arancio sotto −25 (sovraccarico). Calcolato dalla prima corsa, quindi i valori non dipendono dal periodo scelto. Linee verticali = gare in Impostazioni."
+    >
+      {pts.length ? <Chart option={option} className="h-72" /> : <Empty />}
+      <div className="mt-4 grid gap-x-6 gap-y-3 border-t border-[#262b33] pt-4 text-[13px] leading-relaxed md:grid-cols-2" style={{ color: SOFT }}>
+        <p>
+          <b style={{ color: C.pace }}>CTL · Forma (linea blu)</b> — media del carico degli ultimi ~6 settimane. È la tua base aerobica: sale lentamente con settimane costanti e scende lentamente con lo stop. Conta la pendenza: una salita regolare è sostenibile, un'impennata in poche settimane è il segnale classico di rischio infortuni.
+        </p>
+        <p>
+          <b style={{ color: C.hr }}>ATL · Fatica (linea rossa tratteggiata)</b> — media dell'ultima settimana. Reagisce subito: picchi dopo lunghi o blocchi intensi, cali rapidi nei giorni di riposo. Quando sta sopra la blu stai caricando più di quanto sei abituato.
+        </p>
+        <p>
+          <b className="text-[#eef1f4]">TSB · Bilancio (area, asse destro)</b> = CTL − ATL. <span className="text-[#3fbf6a]">Verde sopra 0</span>: fresco, adatto a gare e test. Grigio tra 0 e −25: zona di allenamento produttiva. <span className="text-orange-400">Arancio sotto −25</span>: sovraccarico, sostenibile solo per pochi giorni prima di uno scarico.
+        </p>
+        <p>
+          <b className="text-[#eef1f4]">Come usarlo</b> — Obiettivo: blu che sale nel tempo, con TSB che oscilla tra −10 e −25 nelle settimane di carico e torna verso 0 in scarico. Per una gara arriva con TSB positivo (tapering di 1–2 settimane) senza far crollare la blu. Le <span className="text-amber-400">linee verticali</span> sono le gare impostate.
+        </p>
+        <p className="md:col-span-2 text-xs" style={{ color: MUTED }}>
+          I valori sono in unità di TRIMP (minuti × zona FC); le corse senza cardio contano come tutta Z2, quindi un lavoro intenso senza fascia viene sottostimato. Sono calcolati dalla prima corsa: il periodo selezionato cambia solo la finestra visibile. È un modello: non considera sonno, stress o sensazioni.
+        </p>
+      </div>
+    </Card>
   )
 }
 

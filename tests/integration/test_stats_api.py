@@ -1,3 +1,4 @@
+import math
 import random
 import statistics
 from collections import defaultdict
@@ -470,6 +471,30 @@ def test_fitness_alerts_ramp_and_acwr(engine, client):
     assert "monotony" not in codes  # sd = 0 -> no monotony value
 
 
+def test_load_history_ewma_and_period_cut(engine, client):
+    with Session(engine) as s, s.begin():
+        for day in ("2026-09-01", "2026-09-03"):
+            a = add(s, f"{day}T06:00:00+00:00", 10000, 3000)
+            metrics(s, a, time_in_zones_s=[600, 600, 0, 0, 0])  # 10 + 20 = 30 TRIMP
+    full = get(client, "/api/stats/load-history")["points"]
+    assert full[0]["date"] == "2026-09-01" and full[-1]["date"] == TODAY.isoformat()
+    assert len(full) == 30 and [p["load"] for p in full[:3]] == [30.0, 0.0, 30.0]
+    ctl = atl = 0.0
+    for p in full:  # reference recursion
+        ctl += (p["load"] - ctl) * (1 - math.exp(-1 / 42))
+        atl += (p["load"] - atl) * (1 - math.exp(-1 / 7))
+        assert p["ctl"] == pytest.approx(ctl, abs=0.06) and p["atl"] == pytest.approx(atl, abs=0.06)
+        assert p["tsb"] == pytest.approx(p["ctl"] - p["atl"], abs=0.11)
+    cut = get(client, "/api/stats/load-history", from_date="2026-09-10", to_date="2026-09-12")
+    assert [p["date"] for p in cut["points"]] == ["2026-09-10", "2026-09-11", "2026-09-12"]
+    assert cut["points"][0] == full[9]  # warm-up from the first run, not from from_date
+    assert get(client, "/api/stats/fitness")["ctl"] == pytest.approx(full[-1]["ctl"], abs=0.06)
+
+
+def test_load_history_empty(client):
+    assert get(client, "/api/stats/load-history")["points"] == []
+
+
 def test_fitness_no_ramp_without_base(engine, client):
     with Session(engine) as s, s.begin():
         add(s, f"{TODAY}T06:00:00+00:00", 10000, 3000)
@@ -534,3 +559,24 @@ def test_fitness_alerts_respect_phase(engine, client):
         s.add(Setting(key="cycle_start", value=str(TODAY - timedelta(days=27))))
     f = get(client, "/api/stats/fitness")
     assert f["phase"] == "deload" and "acwr_low" not in {a["code"] for a in f["alerts"]}
+
+
+def test_calendar_month_grid_weeks_and_pr(engine, client):
+    with Session(engine) as s, s.begin():
+        add(s, "2026-09-22T07:00:00+00:00", dist=10000)  # week before the Oct grid
+        a = add(s, "2026-09-29T07:00:00+00:00", dist=15000, elev_gain_m=100.0)  # grid pad
+        add(s, "2026-10-01T07:00:00+00:00", dist=5000)
+        add(s, "2026-10-02T07:00:00+00:00", dist=9000, excluded_from_stats=True)
+        s.add(BestEffort(activity_id=a.id, distance_m=5000.0, elapsed_s=1200, algo_version=1))
+    r = client.get("/api/stats/calendar-month", params={"year": 2026, "month": 10}).json()
+    weeks = list(r["weeks"])
+    assert (weeks[0], weeks[-1]) == ("2026-09-28", "2026-10-26")
+    assert sorted(r["days"]) == ["2026-09-29", "2026-10-01"]  # excluded run hidden
+    assert r["days"]["2026-09-29"][0]["has_pr"] and not r["days"]["2026-10-01"][0]["has_pr"]
+    w = r["weeks"]["2026-09-28"]
+    assert (w["total_distance_m"], w["run_count"], w["elev_gain_m"]) == (20000, 2, 100)
+    assert w["delta_pct"] == 100.0 and r["weeks"]["2026-10-05"]["delta_pct"] == -100.0
+    assert (
+        client.get("/api/stats/calendar-month", params={"year": 2026, "month": 13}).status_code
+        == 422
+    )

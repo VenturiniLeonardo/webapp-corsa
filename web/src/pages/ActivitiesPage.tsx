@@ -2,6 +2,8 @@ import { keepPreviousData, useQuery } from '@tanstack/react-query'
 import { useEffect, useState } from 'react'
 import { Link, useNavigate, useSearchParams } from 'react-router-dom'
 import { api } from '../api/client'
+import ActivityCalendarView from '../components/ActivityCalendarView'
+import { useShoes } from '../components/Shoes'
 import { field, FB, FM, PageHead, pill, surface, btnGhost } from '../components/ui'
 import { formatDate, formatDistance, formatDuration, formatPace } from '../utils/formatters'
 import { PRESETS, presetFrom } from '../utils/period'
@@ -76,6 +78,7 @@ export default function ActivitiesPage() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [q])
 
+  const calendar = get('view') === 'calendar'
   const custom = sp.has('from') || sp.has('to')
   const preset = custom ? '' : get('r') || 'All'
   const sort = get('sort') || 'date'
@@ -97,6 +100,7 @@ export default function ActivitiesPage() {
   for (const [k, v] of ranges) if (v !== undefined) qs.set(k, String(v))
   for (const t of sp.getAll('type')) qs.append('type[]', t)
   for (const t of sp.getAll('wt')) qs.append('workout_type[]', t)
+  if (get('shoe')) qs.set('shoe_id', get('shoe'))
   if (urlQ) qs.set('q', urlQ)
   qs.set('sort', sort)
   qs.set('order', order)
@@ -107,6 +111,7 @@ export default function ActivitiesPage() {
     queryKey: ['activities', qs.toString()],
     queryFn: () => api<ActivityList>(`/api/activities?${qs}`),
     placeholderData: keepPreviousData,
+    enabled: !calendar,
   })
 
   const input = (k: string, ph: string) => (
@@ -137,12 +142,25 @@ export default function ActivitiesPage() {
     </div>
   )
 
+  const shoes = useShoes()
   const agg = data?.aggregate
   const pages = data ? Math.max(1, Math.ceil(data.total / PAGE_SIZE)) : 1
 
   return (
     <div className="space-y-4" style={{ fontFamily: FB }}>
-      <PageHead eyebrow="Tutti gli allenamenti" title="Allenamenti" />
+      <PageHead eyebrow="Tutti gli allenamenti" title="Allenamenti">
+        <div className="flex gap-1">
+          {(['table', 'calendar'] as const).map((v) => (
+            <button key={v} aria-pressed={calendar === (v === 'calendar')} className={pill(calendar === (v === 'calendar'))} onClick={() => set({ view: v === 'table' ? null : v }, true)}>
+              {v === 'table' ? 'Tabella' : 'Calendario'}
+            </button>
+          ))}
+        </div>
+      </PageHead>
+      {calendar ? (
+        <ActivityCalendarView month={get('m') || new Date().toLocaleDateString('sv').slice(0, 7)} setMonth={(m) => set({ m }, true)} />
+      ) : (
+      <>
       <div className={`${surface} space-y-3`}>
       <div className="flex flex-wrap items-center gap-2">
         <div className="flex flex-wrap gap-1">
@@ -169,6 +187,16 @@ export default function ActivitiesPage() {
       <div className="flex flex-wrap gap-x-4 gap-y-2">
         {multi('type', SPORTS)}
         {multi('wt', WORKOUTS)}
+        {!!shoes.data?.length && (
+          <select aria-label="Scarpa" className={field} value={get('shoe')} onChange={(e) => set({ shoe: e.target.value || null })}>
+            <option value="">tutte le scarpe</option>
+            {shoes.data.map((s) => (
+              <option key={s.id} value={s.id}>
+                {s.name}
+              </option>
+            ))}
+          </select>
+        )}
       </div>
       </div>
 
@@ -255,6 +283,8 @@ export default function ActivitiesPage() {
             </button>
           </div>
         </div>
+      )}
+      </>
       )}
     </div>
   )

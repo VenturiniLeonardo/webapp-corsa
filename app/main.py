@@ -11,7 +11,9 @@ from app.api.activities import router as activities_router
 from app.api.ai import router as ai_router
 from app.api.imports import router as imports_router
 from app.api.report import router as report_router
+from app.api.routes import router as routes_router
 from app.api.settings import router as settings_router
+from app.api.shoes import router as shoes_router
 from app.api.stats import router as stats_router
 from app.api.sync import router as sync_router
 from app.core.config import get_settings
@@ -19,7 +21,10 @@ from app.core.config import get_settings
 Next = Callable[[Request], Awaitable[Response]]
 
 AUTH_EXEMPT = {"/healthz"}
-BINARY_UPLOAD = "/api/imports/file"  # raw file body; still needs X-Corsa (forces CORS preflight)
+BINARY_UPLOAD = {
+    "/api/imports/file",
+    "/api/routes/import-file",
+}  # raw file body; still needs X-Corsa
 MUTATING = {"POST", "PUT", "PATCH", "DELETE"}
 CSP = (
     "default-src 'self'; script-src 'self'; "
@@ -37,7 +42,7 @@ async def csrf(request: Request, call_next: Next) -> Response:
     if request.method in MUTATING:
         ct = request.headers.get("content-type", "").split(";")[0].strip().lower()
         ok_ct = ct == "application/json" or (
-            request.url.path == BINARY_UPLOAD and ct == "application/octet-stream"
+            request.url.path in BINARY_UPLOAD and ct == "application/octet-stream"
         )
         if not ok_ct or request.headers.get("x-corsa") != "1":
             return JSONResponse({"detail": "Forbidden"}, status_code=403)
@@ -73,6 +78,8 @@ app.include_router(settings_router)
 app.include_router(ai_router)
 app.include_router(imports_router)
 app.include_router(report_router)
+app.include_router(shoes_router)
+app.include_router(routes_router)
 
 
 @app.get("/healthz")

@@ -52,6 +52,37 @@ class Job(Base):
     finished_at: Mapped[str | None] = mapped_column(Text)
 
 
+class Shoe(Base):
+    __tablename__ = "shoes"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    name: Mapped[str] = mapped_column(Text)
+    brand: Mapped[str | None] = mapped_column(Text)
+    model: Mapped[str | None] = mapped_column(Text)
+    target_distance_m: Mapped[float] = mapped_column(REAL, default=700000.0)
+    initial_distance_m: Mapped[float] = mapped_column(REAL, default=0.0)  # km before the app
+    is_default: Mapped[bool] = mapped_column(Boolean, default=False)  # at most one (app-enforced)
+    retired_at: Mapped[str | None] = mapped_column(Text)  # ISO date
+    created_at: Mapped[str] = mapped_column(Text, default=utcnow_iso)
+
+
+class Route(Base):
+    """Planned route: resampled [lng, lat, ele] line; analysis is recomputed on read."""
+
+    __tablename__ = "routes"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    name: Mapped[str] = mapped_column(Text)
+    notes: Mapped[str | None] = mapped_column(Text)
+    coords: Mapped[Any] = mapped_column(JSON)
+    distance_m: Mapped[float] = mapped_column(REAL)
+    elev_gain_m: Mapped[float] = mapped_column(REAL)
+    elev_loss_m: Mapped[float] = mapped_column(REAL)
+    target_speed_ms: Mapped[float | None] = mapped_column(REAL)  # simulator flat speed
+    created_at: Mapped[str] = mapped_column(Text, default=utcnow_iso)
+    updated_at: Mapped[str] = mapped_column(Text, default=utcnow_iso, onupdate=utcnow_iso)
+
+
 class Activity(Base):
     __tablename__ = "activities"
     __table_args__ = (
@@ -106,6 +137,9 @@ class Activity(Base):
         ForeignKey("source_records.id", use_alter=True, name="fk_activities_stream_source")
     )
     summary_polyline: Mapped[str | None] = mapped_column(Text)
+    shoe_id: Mapped[int | None] = mapped_column(
+        ForeignKey("shoes.id", ondelete="SET NULL", name="fk_activities_shoe")
+    )
     # Open-Meteo at the run midpoint (opt-in, setting weather_enabled); not from the source
     weather_temp_c: Mapped[float | None] = mapped_column(REAL)
     weather_dew_point_c: Mapped[float | None] = mapped_column(REAL)

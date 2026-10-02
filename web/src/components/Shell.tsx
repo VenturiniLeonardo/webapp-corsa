@@ -1,5 +1,5 @@
 import { useQuery } from '@tanstack/react-query'
-import { Activity, LayoutDashboard, Settings, Trophy, Upload } from 'lucide-react'
+import { Activity, Compass, LayoutDashboard, Settings, Trophy, Upload } from 'lucide-react'
 import { NavLink, Outlet } from 'react-router-dom'
 import { api } from '../api/client'
 import { FB, FC } from './ui'
@@ -7,6 +7,7 @@ import { FB, FC } from './ui'
 const links = [
   { to: '/', label: 'Dashboard', icon: LayoutDashboard },
   { to: '/activities', label: 'Allenamenti', icon: Activity },
+  { to: '/routes', label: 'Percorsi', icon: Compass },
   { to: '/records', label: 'Record', icon: Trophy },
   { to: '/sync', label: 'Import', icon: Upload },
   { to: '/settings', label: 'Impostazioni', icon: Settings },
@@ -55,9 +56,9 @@ export default function Shell() {
       <main className="mx-auto w-full max-w-7xl flex-1 px-4 pt-7 pb-20 md:px-8 md:pb-14">
         <Outlet />
       </main>
-      <nav className="fixed inset-x-0 bottom-0 z-10 grid grid-cols-5 border-t border-[#262b33] bg-[#111418] md:hidden">
+      <nav className="fixed inset-x-0 bottom-0 z-10 grid grid-cols-6 border-t border-[#262b33] bg-[#111418] md:hidden">
         {links.map(({ to, label, icon: Icon }) => (
-          <NavLink key={to} to={to} end={to === '/'} className={(s) => `flex min-h-14 flex-col items-center justify-center gap-0.5 text-xs ${cls(s)}`}>
+          <NavLink key={to} to={to} end={to === '/'} className={(s) => `flex min-h-14 min-w-0 flex-col items-center justify-center gap-0.5 text-[11px] ${cls(s)}`}>
             <Icon size={20} aria-hidden />
             {label}
           </NavLink>

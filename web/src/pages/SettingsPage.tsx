@@ -1,6 +1,7 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { useEffect, useState } from 'react'
 import { api } from '../api/client'
+import { ShoesPanel } from '../components/Shoes'
 import { btn, FB, PageHead, Panel } from '../components/ui'
 
 type Settings = {
@@ -83,9 +84,9 @@ export default function SettingsPage() {
   }, [toast])
 
   return (
+    <div className="max-w-2xl space-y-4" style={{ fontFamily: FB }}>
     <form
-      className="max-w-2xl space-y-4"
-      style={{ fontFamily: FB }}
+      className="space-y-4"
       onSubmit={(e) => {
         e.preventDefault()
         if (!err) save.mutate()
@@ -195,5 +196,7 @@ export default function SettingsPage() {
         )}
       </div>
     </form>
+    <ShoesPanel />
+    </div>
   )
 }

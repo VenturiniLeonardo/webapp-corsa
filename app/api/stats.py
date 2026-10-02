@@ -8,7 +8,7 @@ import math
 import statistics
 from bisect import bisect_left, bisect_right
 from collections import defaultdict
-from collections.abc import Sequence
+from collections.abc import Iterator, Sequence
 from dataclasses import dataclass, replace
 from datetime import UTC, date, datetime, timedelta
 from typing import Annotated, Any, Literal
@@ -658,16 +658,43 @@ def _alerts(ix: dict[str, float | None], ramp: float | None, phase: Phase | None
     return out
 
 
+def _banister(daily: dict[date, float], end: date) -> Iterator[tuple[date, float, float, float]]:
+    """(day, load, ctl, atl) for every day from the first load to `end`, rest days included."""
+    if not daily:
+        return
+    ctl = atl = 0.0
+    day = min(daily)
+    while day <= end:
+        x = daily.get(day, 0.0)
+        ctl += (x - ctl) * (1 - math.exp(-1 / 42))
+        atl += (x - atl) * (1 - math.exp(-1 / 7))
+        yield day, x, ctl, atl
+        day += timedelta(days=1)
+
+
+def _daily_loads(s: Db, sc: Scope) -> tuple[dict[date, float], dict[date, float]]:
+    """Edwards TRIMP and km per local day over the whole history (period filters ignored)."""
+    daily: dict[date, float] = defaultdict(float)
+    daily_km: dict[date, float] = defaultdict(float)
+    for d, zs, mv, dist in s.execute(
+        select(A.local_date, ActivityMetrics.time_in_zones_s, A.moving_s, A.distance_m)
+        .select_from(A)
+        .join(ActivityMetrics, ActivityMetrics.activity_id == A.id)
+        .where(*replace(sc, from_date=None, to_date=None).where())
+    ):
+        # Edwards TRIMP: minutes in zone k weighted k; no HR -> assume Z2 (ponytail: crude)
+        load = sum((k + 1) * t / 60 for k, t in enumerate(zs)) if zs else 2 * (mv or 0) / 60
+        daily[date.fromisoformat(d)] += load
+        daily_km[date.fromisoformat(d)] += (dist or 0) / 1000
+    return daily, daily_km
+
+
 def _load_indices(daily: dict[date, float], today: date) -> dict[str, float | None]:
     if not daily:
         return dict.fromkeys(("ctl", "atl", "tsb", "acwr", "monotony", "strain"))
     ctl = atl = 0.0
-    day = min(daily)
-    while day <= today:
-        x = daily.get(day, 0.0)
-        ctl += (x - ctl) * (1 - math.exp(-1 / 42))
-        atl += (x - atl) * (1 - math.exp(-1 / 7))
-        day += timedelta(days=1)
+    for _, _, ctl, atl in _banister(daily, today):
+        pass
     last = [daily.get(today - timedelta(days=i), 0.0) for i in range(28)]
     week, sd = last[:7], statistics.pstdev(last[:7])
     acute, chronic = sum(week), sum(last) / 4
@@ -731,18 +758,7 @@ def fitness(s: Db, sc: Sc) -> Fitness:
                 v = float(d_m or 0) / (float(mv or 1) / 60)
                 est.append(0.2 * v / frac + 3.5)  # ACSM running VO2, Swain
 
-    daily: dict[date, float] = defaultdict(float)
-    daily_km: dict[date, float] = defaultdict(float)
-    for d, zs, mv, dist in s.execute(
-        select(A.local_date, ActivityMetrics.time_in_zones_s, A.moving_s, A.distance_m)
-        .select_from(A)
-        .join(ActivityMetrics, ActivityMetrics.activity_id == A.id)
-        .where(*replace(base, from_date=today - timedelta(days=VDOT_WINDOW_DAYS)).where())
-    ):
-        # Edwards TRIMP: minutes in zone k weighted k; no HR -> assume Z2 (ponytail: crude)
-        load = sum((k + 1) * t / 60 for k, t in enumerate(zs)) if zs else 2 * (mv or 0) / 60
-        daily[date.fromisoformat(d)] += load
-        daily_km[date.fromisoformat(d)] += (dist or 0) / 1000
+    daily, daily_km = _daily_loads(s, base)  # from the first run, so CTL matches load-history
 
     preds = []
     if best:
@@ -766,6 +782,39 @@ def fitness(s: Db, sc: Sc) -> Fitness:
         ramp_pct=ramp,
         alerts=_alerts(ix, ramp, phase),
         phase=phase,
+    )
+
+
+class LoadPoint(BaseModel):
+    date: str
+    load: float  # Edwards TRIMP of the day, 0 on rest days
+    ctl: float
+    atl: float
+    tsb: float
+
+
+class LoadHistory(BaseModel):
+    points: list[LoadPoint]
+
+
+@router.get("/stats/load-history")
+def load_history(s: Db, sc: Sc) -> LoadHistory:
+    """Daily Banister series (PMC). Run from the first load so the warm-up transient is gone,
+    then cut to the requested period; days after today show the decay with no new load."""
+    daily, _ = _daily_loads(s, sc)
+    lo = sc.from_date or date.min
+    return LoadHistory(
+        points=[
+            LoadPoint(
+                date=d.isoformat(),
+                load=round(x, 1),
+                ctl=round(c, 1),
+                atl=round(a, 1),
+                tsb=round(c - a, 1),
+            )
+            for d, x, c, a in _banister(daily, sc.to_date or _today())
+            if d >= lo
+        ]
     )
 
 
@@ -805,3 +854,85 @@ def records(s: Db) -> list[Record]:
         )
         for d, label in LABELS.items()
     ]
+
+
+class CalendarItem(BaseModel):
+    id: int
+    name: str | None
+    sport_type: str
+    workout_type: str | None
+    distance_m: float
+    moving_s: int
+    avg_hr: float | None
+    has_pr: bool
+
+
+class CalendarWeek(BaseModel):
+    total_distance_m: float
+    total_moving_s: int
+    run_count: int
+    elev_gain_m: float
+    delta_pct: float | None  # distance vs the previous week
+
+
+class CalendarMonth(BaseModel):
+    year: int
+    month: int
+    days: dict[str, list[CalendarItem]]  # local_date -> runs, whole Mon..Sun grid
+    weeks: dict[str, CalendarWeek]  # Monday (ISO date) -> totals
+
+
+@router.get("/stats/calendar-month")
+def calendar_month(
+    s: Db, year: Annotated[int, Query(ge=1970, le=2100)], month: Annotated[int, Query(ge=1, le=12)]
+) -> CalendarMonth:
+    """Month grid padded to whole ISO weeks; one week earlier is read for the first delta."""
+    first = date(year, month, 1)
+    start = first - timedelta(days=first.weekday())
+    last = date(year, month, calendar.monthrange(year, month)[1])
+    end = last + timedelta(days=6 - last.weekday())
+    rows = s.scalars(
+        select(A)
+        .where(
+            A.excluded_from_stats.is_(False),
+            A.duplicate_of_id.is_(None),
+            A.local_date.between((start - timedelta(days=7)).isoformat(), end.isoformat()),
+        )
+        .order_by(A.start_time_utc)
+    ).all()
+    prs = {e.activity_id for r in records(s) for e in r.progression}
+    days: dict[str, list[CalendarItem]] = {}
+    tot: dict[date, list[float]] = defaultdict(lambda: [0.0, 0, 0, 0.0])
+    for a in rows:
+        d = date.fromisoformat(a.local_date)
+        t = tot[d - timedelta(days=d.weekday())]
+        t[0] += a.distance_m or 0
+        t[1] += a.moving_s or 0
+        t[2] += 1
+        t[3] += a.elev_gain_m or 0
+        if d >= start:
+            days.setdefault(a.local_date, []).append(
+                CalendarItem(
+                    id=a.id,
+                    name=a.name,
+                    sport_type=a.sport_type,
+                    workout_type=a.workout_type,
+                    distance_m=a.distance_m or 0,
+                    moving_s=a.moving_s or 0,
+                    avg_hr=a.avg_hr,
+                    has_pr=a.id in prs,
+                )
+            )
+    weeks = {}
+    for i in range((end - start).days // 7 + 1):
+        mon = start + timedelta(weeks=i)
+        dist, mov, n, elev = tot[mon]
+        prev = tot[mon - timedelta(weeks=1)][0]
+        weeks[mon.isoformat()] = CalendarWeek(
+            total_distance_m=dist,
+            total_moving_s=int(mov),
+            run_count=int(n),
+            elev_gain_m=elev,
+            delta_pct=round((dist / prev - 1) * 100, 1) if prev else None,
+        )
+    return CalendarMonth(year=year, month=month, days=days, weeks=weeks)

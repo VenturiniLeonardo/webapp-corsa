@@ -12,6 +12,7 @@ import SyncPage from './pages/SyncPage'
 // MapLibre + ECharts only load on the detail route
 const ActivityDetailPage = lazy(() => import('./pages/ActivityDetailPage'))
 const DashboardPage = lazy(() => import('./pages/DashboardPage'))
+const RoutePlannerPage = lazy(() => import('./pages/RoutePlannerPage'))
 const loading = <p className="text-sm text-neutral-500">Loading…</p>
 
 export default function App() {
@@ -30,6 +31,7 @@ export default function App() {
                 </Suspense>
               }
             />
+            <Route path="routes" element={<Suspense fallback={loading}><RoutePlannerPage /></Suspense>} />
             <Route path="records" element={<RecordsPage />} />
             <Route path="sync" element={<SyncPage />} />
             <Route path="settings" element={<SettingsPage />} />

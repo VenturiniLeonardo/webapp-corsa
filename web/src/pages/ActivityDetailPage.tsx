@@ -10,6 +10,7 @@ import { Link, useNavigate, useParams } from 'react-router-dom'
 import { api } from '../api/client'
 import ActivityReport from '../components/ActivityReport'
 import AiPanel from '../components/AiPanel'
+import { useShoes } from '../components/Shoes'
 import { btnGhost, field, FB, FC, FM, MUTED, pill, surface } from '../components/ui'
 import { formatDate, formatDistance, formatDuration, formatPace } from '../utils/formatters'
 
@@ -28,6 +29,7 @@ type Summary = {
 type Activity = Summary & {
   notes: string | null
   difficulty: number | null
+  shoe_id: number | null
   elapsed_s: number | null
   elev_gain_m: number | null
   elev_loss_m: number | null
@@ -141,6 +143,7 @@ export default function ActivityDetailPage() {
   })
   const similar = useQuery({ queryKey: ['similar', id], queryFn: () => api<Similar[]>(`/api/activities/${id}/similar`) })
   const settings = useQuery({ queryKey: ['settings'], queryFn: () => api<Settings>('/api/settings') })
+  const shoes = useShoes()
   const patch = useMutation({
     mutationFn: (body: Record<string, unknown>) => api(`/api/activities/${id}`, { method: 'PATCH', body: JSON.stringify(body) }),
     onSuccess: () => {
@@ -247,6 +250,23 @@ export default function ActivityDetailPage() {
             </option>
           ))}
         </select>
+        {!!shoes.data?.length && (
+          <select
+            aria-label="Scarpa"
+            className={`${field} min-h-10 md:min-h-0`}
+            value={a.shoe_id ?? ''}
+            onChange={(e) => patch.mutate({ shoe_id: e.target.value ? Number(e.target.value) : null })}
+          >
+            <option value="">scarpa —</option>
+            {shoes.data
+              .filter((s) => !s.retired_at || s.id === a.shoe_id)
+              .map((s) => (
+                <option key={s.id} value={s.id}>
+                  {s.name}
+                </option>
+              ))}
+          </select>
+        )}
         <label className="flex items-center gap-1 text-xs text-neutral-400">
           <input type="checkbox" checked={a.excluded_from_stats} onChange={(e) => patch.mutate({ excluded_from_stats: e.target.checked })} />
           exclude from stats
