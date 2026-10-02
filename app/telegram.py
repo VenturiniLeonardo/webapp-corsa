@@ -26,6 +26,19 @@ MAX_DOWNLOAD = 20 * 1024 * 1024  # Bot API getFile limit; bigger files go throug
 HELP = "Mandami un file attività (.fit, .gpx, .tcx, .gz, .json o .zip): ti rispondo col report."
 
 
+def _chunks(text: str, size: int = 4096) -> list[str]:
+    """Split on line boundaries into Telegram-sized messages (sendMessage max 4096 chars)."""
+    out = [""]
+    for line in text.splitlines():
+        while len(line) >= size:  # a single overlong line: hard cut
+            out.append(line[:size])
+            line = line[size:]
+        if len(out[-1]) + len(line) + 1 > size:
+            out.append("")
+        out[-1] += line + "\n"
+    return [c for c in out if c.strip()]
+
+
 class Bot:
     def __init__(self, engine: Engine, token: str, chat_id: str, http: httpx.Client) -> None:
         self.engine, self.token, self.chat_id, self.http = engine, token, chat_id, http
@@ -72,12 +85,9 @@ class Bot:
         failed = "".join(f"\n- {f['id']}: {f['error']}" for f in out["failed"][:10])
         if not reports or failed:
             self.say(chat, f"Nessuna corsa importata. {out}" if not reports else failed.strip())
-        for aid, text in reports:
-            self._call(
-                "sendDocument",
-                data={"chat_id": chat},
-                files={"document": (f"activity-{aid}-report.txt", text.encode())},
-            )
+        for _, text in reports:
+            for part in _chunks(text):
+                self.say(chat, part)
 
     def run(self, stop: threading.Event) -> None:
         offset = 0

@@ -220,7 +220,8 @@ def build_draft(
         external_id=ext_id,
         source_start_time_utc=start_iso,
         sport_type="treadmill" if indoor else "run",
-        name=m.get("name") or f"Run {local_date}",  # FIT carries no title
+        # FIT carries no title: fall back to the uploaded file name, then the date
+        name=m.get("name") or m.get("file_title") or f"Run {local_date}",
         start_time_utc=start_iso,
         timezone=TZ,
         local_date=local_date,
@@ -322,5 +323,7 @@ def import_upload(engine: Engine, name: str, data: bytes) -> dict[str, Any]:
         except (ValueError, KeyError, TypeError) as e:
             raise Rejected("expected Health Auto Export JSON: data.workouts[]") from e
         return import_workouts(engine, workouts)
-    st = store_file(engine, name, data)
+    p = PurePosixPath(name)
+    stem = PurePosixPath(p.stem).stem if p.suffix.lower() == ".gz" else p.stem
+    st = store_file(engine, name, data, {"file_title": stem.replace("_", " ").strip()})
     return {"mapped": 0, "skipped": 0, "duplicate": 0, "failed": []} | {st: 1}
