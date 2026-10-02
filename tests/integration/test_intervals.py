@@ -7,6 +7,7 @@ from sqlalchemy.orm import Session
 from test_file_import import _gpx
 from test_hae_import import client  # noqa: F401
 
+from app.core.config import get_settings
 from app.domain.models import Activity, Setting
 from app.ingest import intervals
 
@@ -41,7 +42,8 @@ def test_sync_imports_runs_once(client):  # noqa: F811
     assert f1.call_count == 1  # already imported: not downloaded again
 
 
-def test_sync_endpoint_needs_key(client):  # noqa: F811
+def test_sync_endpoint_needs_key(client, monkeypatch):  # noqa: F811
+    monkeypatch.setattr(get_settings(), "INTERVALS_API_KEY", "")  # ignore a local .env key
     c, _ = client
     assert c.get("/api/intervals/status").json() == {"enabled": False}
     h = {"X-Corsa": "1", "Content-Type": "application/json"}

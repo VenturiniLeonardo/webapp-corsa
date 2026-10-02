@@ -1,15 +1,15 @@
 import { useQuery } from '@tanstack/react-query'
-import { Activity, BarChart3, LayoutDashboard, Trophy, Upload } from 'lucide-react'
+import { Activity, LayoutDashboard, Settings, Trophy, Upload } from 'lucide-react'
 import { NavLink, Outlet } from 'react-router-dom'
 import { api } from '../api/client'
-import { FB, FC, Fonts } from './ui'
+import { FB, FC } from './ui'
 
 const links = [
   { to: '/', label: 'Dashboard', icon: LayoutDashboard },
   { to: '/activities', label: 'Allenamenti', icon: Activity },
   { to: '/records', label: 'Record', icon: Trophy },
   { to: '/sync', label: 'Import', icon: Upload },
-  { to: '/settings', label: 'Impostazioni', icon: BarChart3 },
+  { to: '/settings', label: 'Impostazioni', icon: Settings },
 ]
 
 function Connection() {
@@ -34,7 +34,6 @@ const tab = (s: { isActive: boolean }) => `rounded-lg px-3.5 py-2 ${s.isActive ?
 export default function Shell() {
   return (
     <div className="flex min-h-screen flex-col overflow-x-hidden" style={{ fontFamily: FB }}>
-      <Fonts />
       <header className="sticky top-0 z-10 border-b border-[#262b33] bg-[#111418]">
         <div className="mx-auto flex h-16 max-w-7xl items-center gap-6 px-4 md:px-8">
           <NavLink to="/" className="flex items-center gap-2.5 text-[#eef1f4]">
@@ -56,8 +55,8 @@ export default function Shell() {
       <main className="mx-auto w-full max-w-7xl flex-1 px-4 pt-7 pb-20 md:px-8 md:pb-14">
         <Outlet />
       </main>
-      <nav className="fixed inset-x-0 bottom-0 z-10 grid grid-cols-4 border-t border-[#262b33] bg-[#111418] md:hidden">
-        {links.slice(0, 4).map(({ to, label, icon: Icon }) => (
+      <nav className="fixed inset-x-0 bottom-0 z-10 grid grid-cols-5 border-t border-[#262b33] bg-[#111418] md:hidden">
+        {links.map(({ to, label, icon: Icon }) => (
           <NavLink key={to} to={to} end={to === '/'} className={(s) => `flex min-h-14 flex-col items-center justify-center gap-0.5 text-xs ${cls(s)}`}>
             <Icon size={20} aria-hidden />
             {label}

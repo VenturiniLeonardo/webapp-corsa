@@ -16,10 +16,6 @@ export const btnGhost = 'inline-flex min-h-10 items-center rounded-full border b
 export const pill = (on: boolean) => `min-h-10 rounded-full border px-4 text-sm font-semibold md:min-h-9 ${on ? 'border-[#eef1f4] bg-[#eef1f4] text-[#111418]' : 'border-[#262b33] text-[#aab2bd] hover:text-[#eef1f4]'}`
 export const eyebrow = 'text-xs tracking-[.08em] uppercase text-[#8a93a0]'
 
-export const Fonts = () => (
-  <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Barlow+Condensed:wght@500;600;700&family=Barlow:wght@400;500;600&family=IBM+Plex+Mono:wght@400;500&display=swap" />
-)
-
 export function PageHead({ eyebrow: e, title, children }: { eyebrow?: ReactNode; title: ReactNode; children?: ReactNode }) {
   return (
     <header className="flex flex-wrap items-end justify-between gap-4">

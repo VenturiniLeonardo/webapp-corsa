@@ -4,7 +4,6 @@ import { api, type ApiError } from "../api/client";
 import {
   btn as btnPrimary,
   FB,
-  Fonts,
   PageHead,
   Panel,
 } from "../components/ui";
@@ -123,7 +122,6 @@ export default function SyncPage() {
 
   return (
     <div className="space-y-4" style={{ fontFamily: FB }}>
-      <Fonts />
       <PageHead eyebrow="Import da file" title="Import" />
       <Panel
         title="intervals.icu"

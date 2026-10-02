@@ -33,6 +33,7 @@ export default function App() {
             <Route path="records" element={<RecordsPage />} />
             <Route path="sync" element={<SyncPage />} />
             <Route path="settings" element={<SettingsPage />} />
+            <Route path="*" element={<p className="text-sm text-neutral-500">Pagina non trovata.</p>} />
           </Route>
         </Routes>
       </BrowserRouter>

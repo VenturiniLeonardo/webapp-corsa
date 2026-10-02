@@ -1,7 +1,7 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { useEffect, useState } from 'react'
 import { api } from '../api/client'
-import { btn, FB, Fonts, PageHead, Panel } from '../components/ui'
+import { btn, FB, PageHead, Panel } from '../components/ui'
 
 type Settings = {
   hr_max: number | null
@@ -91,7 +91,6 @@ export default function SettingsPage() {
         if (!err) save.mutate()
       }}
     >
-      <Fonts />
       <PageHead eyebrow="Frequenza cardiaca e soglie" title="Impostazioni" />
       {q.isError && <p className="text-sm text-red-400">Failed to load settings.</p>}
       <p role="alert" className="rounded-[14px] border border-amber-500/40 px-4 py-3 text-sm text-amber-400">

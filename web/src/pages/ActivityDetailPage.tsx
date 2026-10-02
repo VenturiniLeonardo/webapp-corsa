@@ -10,7 +10,7 @@ import { Link, useNavigate, useParams } from 'react-router-dom'
 import { api } from '../api/client'
 import ActivityReport from '../components/ActivityReport'
 import AiPanel from '../components/AiPanel'
-import { btnGhost, field, FB, FC, FM, Fonts, MUTED, pill, surface } from '../components/ui'
+import { btnGhost, field, FB, FC, FM, MUTED, pill, surface } from '../components/ui'
 import { formatDate, formatDistance, formatDuration, formatPace } from '../utils/formatters'
 
 // --- API shapes (app/api/activities.py) -------------------------------------
@@ -144,8 +144,7 @@ export default function ActivityDetailPage() {
   const patch = useMutation({
     mutationFn: (body: Record<string, unknown>) => api(`/api/activities/${id}`, { method: 'PATCH', body: JSON.stringify(body) }),
     onSuccess: () => {
-      qc.invalidateQueries({ queryKey: ['activity', id] })
-      qc.invalidateQueries({ queryKey: ['activities'] })
+      qc.invalidateQueries({ predicate: (q) => q.queryKey[0] !== 'streams' })
     },
   })
 
@@ -153,8 +152,8 @@ export default function ActivityDetailPage() {
   const del = useMutation({
     mutationFn: () => api(`/api/activities/${id}`, { method: 'DELETE' }),
     onSuccess: () => {
-      qc.removeQueries({ queryKey: ['activity', id] })
-      qc.invalidateQueries({ queryKey: ['activities'] })
+      qc.removeQueries({ predicate: (q) => q.queryKey[1] === id }) // activity, streams, similar of the deleted run
+      qc.invalidateQueries({ predicate: (q) => q.queryKey[0] !== 'streams' })
       nav('/activities')
     },
   })
@@ -218,7 +217,6 @@ export default function ActivityDetailPage() {
 
   return (
     <div className="space-y-4" style={{ fontFamily: FB }}>
-      <Fonts />
       {/* 1. header */}
       <header className="flex flex-wrap items-center gap-x-3 gap-y-2">
         <div className="mr-auto min-w-0">
@@ -767,7 +765,7 @@ function Charts({ st, series, settings, onHover }: { st: Streams; series: Series
     const { x, mode } = series
     const xFmt = (v: number) => (mode === 'distance' ? `${v.toFixed(2)} km` : clock(v))
     const axisX = (v: number) => (mode === 'distance' ? `${+v.toFixed(1)}` : clock(v))
-    const mk = (name: string, y: (number | null)[], color: string, fmt: (v: number) => string, extra: { area?: boolean; inverse?: boolean; max?: number; bands?: [number, number, string][] } = {}): EChartsOption => ({
+    const mk = (name: string, y: (number | null)[], color: string, fmt: (v: number) => string, extra: { area?: boolean; inverse?: boolean; max?: (v: { max: number }) => number; bands?: [number, number, string][] } = {}): EChartsOption => ({
       animation: false,
       backgroundColor: 'transparent',
       textStyle: { color: C.text, fontFamily: 'ui-monospace, monospace' },
@@ -806,7 +804,7 @@ function Charts({ st, series, settings, onHover }: { st: Streams; series: Series
     })
 
     const out: [string, EChartsOption][] = []
-    if (has(series.pace)) out.push(['pace', mk('Pace', series.pace, C.pace, (v) => formatPace(v).replace(' /km', ''), { inverse: true, max: CHART_PACE_MAX + 15 })])
+    if (has(series.pace)) out.push(['pace', mk('Pace', series.pace, C.pace, (v) => formatPace(v).replace(' /km', ''), { inverse: true, max: (v) => Math.min(v.max, CHART_PACE_MAX) + 15 })])
     if (has(st.hr)) {
       const z = settings?.hr_zones
       const hrs = st.hr!.filter((v): v is number => v != null)

@@ -87,6 +87,7 @@ const base: EChartsOption = {
 }
 const splitLine = { lineStyle: { color: C.grid, type: 'dashed' as const } }
 const axisLine = { lineStyle: { color: C.grid } }
+const timeAxis = { type: 'time' as const, axisLine, splitLine: { show: false }, axisLabel: { hideOverlap: true } }
 
 // --- page -------------------------------------------------------------------
 const PRESET_LABEL: Record<string, string> = { Week: 'Settimana corrente', '4W': 'Last 4 weeks', '12W': 'Last 12 weeks', '6M': 'Last 6 months', YTD: 'Year to date', '1Y': 'Last 12 months', All: 'All time' }
@@ -142,7 +143,6 @@ export default function DashboardPage() {
 
   return (
     <div className="space-y-4" style={{ fontFamily: FB }}>
-      <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Barlow+Condensed:wght@500;600;700&family=Barlow:wght@400;500;600&family=IBM+Plex+Mono:wght@400;500&display=swap" />
       <header className="flex flex-wrap items-end justify-between gap-4">
         <div>
           <div className="text-xs tracking-[.08em] text-neutral-500 uppercase" style={{ fontFamily: FM }}>{subtitle}</div>
@@ -244,7 +244,7 @@ const NoData = ({ h = 160 }: { h?: number }) => (
 
 function Pills<T extends string>({ value, options, onChange }: { value: T; options: readonly T[]; onChange: (v: T) => void }) {
   return (
-    <div role="group" className="flex gap-0.5 rounded-full border border-[#262b33] p-1" style={{ background: SURF }}>
+    <div role="group" className="flex flex-wrap gap-0.5 rounded-3xl border border-[#262b33] p-1" style={{ background: SURF }}>
       {options.map((o) => (
         <button key={o} aria-pressed={value === o} onClick={() => onChange(o)} className="min-h-10 cursor-pointer rounded-full px-4 text-sm font-semibold" style={value === o ? { background: '#eef1f4', color: '#111418' } : { color: SOFT }}>
           {o}
@@ -716,7 +716,7 @@ function PaceChart({ data: raw, gap }: { data?: Trends; gap?: Trends }) {
     ? {
         ...base,
         tooltip: { ...base.tooltip, trigger: 'item' },
-        xAxis: { type: 'time', axisLine, splitLine: { show: false } },
+        xAxis: timeAxis,
         yAxis: { type: 'value', inverse: true, scale: true, max: (e) => Math.min(e.max, PACE_CLAMP), splitLine, axisLabel: { formatter: (v: number) => mmss(v) } },
         series: trendSeries(data, C.pace, (x) => formatPace(x), PACE_CLAMP),
       }
@@ -741,8 +741,8 @@ function CadenceChart({ data }: { data?: CadenceBands }) {
   const option: EChartsOption = {
     ...base,
     tooltip: { ...base.tooltip, trigger: 'item', formatter: (p) => { const [d, c, pace] = (p as unknown as { value: [string, number, number] }).value; return `${d}<br/>${Math.round(c)} spm · ${formatPace(pace)}` } },
-    xAxis: { type: 'time', axisLine, splitLine: { show: false } },
-    yAxis: { type: 'value', scale: true, splitLine },
+    xAxis: timeAxis,
+    yAxis: { type: 'value', scale: true, minInterval: 1, splitLine },
     series: used.map((b) => ({
       name: bandName(b),
       type: 'scatter',
@@ -812,7 +812,7 @@ function EfChart({ data: raw, adj }: { data?: Trends; adj?: Trends }) {
   const option: EChartsOption = {
     ...base,
     tooltip: { ...base.tooltip, trigger: 'item' },
-    xAxis: { type: 'time', axisLine, splitLine: { show: false } },
+    xAxis: timeAxis,
     yAxis: { type: 'value', scale: true, splitLine, axisLabel: { formatter: (v: number) => v.toFixed(2) } },
     series,
   }
@@ -834,7 +834,7 @@ function DecouplingChart({ data }: { data?: Trends }) {
   const option: EChartsOption = {
     ...base,
     tooltip: { ...base.tooltip, trigger: 'item' },
-    xAxis: { type: 'time', axisLine, splitLine: { show: false } },
+    xAxis: timeAxis,
     yAxis: { type: 'value', scale: true, splitLine, axisLabel: { formatter: '{value}%' } },
     series,
   }
@@ -856,7 +856,7 @@ function HrRefChart({ data, refPace }: { data?: Trends; refPace: number }) {
   const option: EChartsOption = {
     ...base,
     tooltip: { ...base.tooltip, trigger: 'item' },
-    xAxis: { type: 'time', axisLine, splitLine: { show: false } },
+    xAxis: timeAxis,
     yAxis: { type: 'value', scale: true, splitLine },
     series,
   }
@@ -880,7 +880,7 @@ function PaceHrChart({ data }: { data?: PaceHr }) {
     ...base,
     tooltip: { ...base.tooltip, trigger: 'item', formatter: (p) => { const [x, y, t, mv] = (p as unknown as { value: number[] }).value; return `${iso(new Date(t))}<br/>${formatPace(x)} · ${Math.round(y)} bpm · ${formatDuration(mv)}` } },
     visualMap: { show: false, dimension: 2, min: Math.min(...ts), max: Math.max(...ts), inRange: { color: ['#1e2a40', '#60a5fa'] } },
-    xAxis: { type: 'value', inverse: true, scale: true, max: (e) => Math.min(e.max, PACE_CLAMP), axisLine, splitLine: { show: false }, axisLabel: { formatter: (v: number) => mmss(v) } },
+    xAxis: { type: 'value', inverse: true, scale: true, max: (e) => Math.min(e.max, PACE_CLAMP), axisLine, splitLine: { show: false }, axisLabel: { formatter: (v: number) => mmss(v), hideOverlap: true } },
     yAxis: { type: 'value', scale: true, splitLine },
     series: [{ type: 'scatter', symbolSize: 7, data: pts }],
   }
@@ -904,7 +904,7 @@ function BestEffortChart({ data }: { data?: RecordRow[] }) {
   const option: EChartsOption = {
     ...base,
     tooltip: { ...base.tooltip, trigger: 'item', formatter: (p) => { const [d, s] = (p as unknown as { value: [string, number] }).value; return `${d}<br/>${clock(s)}` } },
-    xAxis: { type: 'time', axisLine, splitLine: { show: false } },
+    xAxis: timeAxis,
     yAxis: { type: 'value', inverse: true, scale: true, splitLine, axisLabel: { formatter: (v: number) => clock(v) } },
     series: [
       { type: 'line', step: 'end', showSymbol: false, silent: true, lineStyle: { color: C.pace, width: 2 }, data: prog.map((e) => [e.local_date, e.elapsed_s]) },

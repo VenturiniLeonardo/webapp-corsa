@@ -1,7 +1,7 @@
 import { useQuery } from '@tanstack/react-query'
 import { Link } from 'react-router-dom'
 import { api } from '../api/client'
-import { BLUE, FC, FM, FB, Fonts, MUTED, PageHead, SOFT, surface } from '../components/ui'
+import { BLUE, FC, FM, FB, MUTED, PageHead, SOFT, surface } from '../components/ui'
 import { formatDuration, formatPace } from '../utils/formatters'
 
 type Effort = { activity_id: number; local_date: string; elapsed_s: number; workout_type: string | null }
@@ -30,7 +30,6 @@ export default function RecordsPage() {
   if (!data) return <p className="text-sm text-neutral-500">Loading…</p>
   return (
     <div className="space-y-4" style={{ fontFamily: FB }}>
-      <Fonts />
       <PageHead eyebrow="Best efforts di sempre" title="Record" />
       <p className="text-[13px]" style={{ color: MUTED }}>All-time PRs from best efforts inside activities (outdoor, no GPS-suspect). A training effort is not a race.</p>
       <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-3">

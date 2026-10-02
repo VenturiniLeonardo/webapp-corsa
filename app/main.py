@@ -22,7 +22,8 @@ BINARY_UPLOAD = "/api/imports/file"  # raw file body; still needs X-Corsa (force
 MUTATING = {"POST", "PUT", "PATCH", "DELETE"}
 CSP = (
     "default-src 'self'; script-src 'self'; "
-    "style-src 'self' 'unsafe-inline' https://tiles.openfreemap.org; "
+    "style-src 'self' 'unsafe-inline' https://tiles.openfreemap.org https://fonts.googleapis.com; "
+    "font-src 'self' https://fonts.gstatic.com; "
     "img-src 'self' data: blob: https://tiles.openfreemap.org; "
     "connect-src 'self' https://tiles.openfreemap.org; worker-src 'self' blob:"
 )
@@ -85,7 +86,7 @@ class SPA(StaticFiles):
         try:
             return await super().get_response(path, scope)
         except HTTPException as e:
-            if e.status_code != 404 or path.startswith("api/"):
+            if e.status_code != 404 or scope["path"].startswith("/api/"):
                 raise
             return await super().get_response("index.html", scope)
 

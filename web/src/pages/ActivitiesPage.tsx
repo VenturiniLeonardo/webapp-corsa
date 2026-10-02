@@ -2,7 +2,7 @@ import { keepPreviousData, useQuery } from '@tanstack/react-query'
 import { useEffect, useState } from 'react'
 import { Link, useNavigate, useSearchParams } from 'react-router-dom'
 import { api } from '../api/client'
-import { field, FB, FM, Fonts, PageHead, pill, surface, btnGhost } from '../components/ui'
+import { field, FB, FM, PageHead, pill, surface, btnGhost } from '../components/ui'
 import { formatDate, formatDistance, formatDuration, formatPace } from '../utils/formatters'
 import { PRESETS, presetFrom } from '../utils/period'
 
@@ -142,11 +142,10 @@ export default function ActivitiesPage() {
 
   return (
     <div className="space-y-4" style={{ fontFamily: FB }}>
-      <Fonts />
       <PageHead eyebrow="Tutti gli allenamenti" title="Allenamenti" />
       <div className={`${surface} space-y-3`}>
       <div className="flex flex-wrap items-center gap-2">
-        <div className="flex gap-1">
+        <div className="flex flex-wrap gap-1">
           {PRESETS.map((p) => (
             <button
               key={p}
@@ -159,7 +158,7 @@ export default function ActivitiesPage() {
           ))}
         </div>
         <input type="date" aria-label="From" className={`${field} ${mono}`} value={from ?? ''} onChange={(e) => set({ from: e.target.value || null, r: null })} />
-        <input type="date" aria-label="To" className={`${field} ${mono}`} value={get('to')} onChange={(e) => set({ to: e.target.value || null, r: null })} />
+        <input type="date" aria-label="To" className={`${field} ${mono}`} value={get('to')} onChange={(e) => set({ to: e.target.value || null, from: from ?? null, r: null })} />
         <input type="search" aria-label="Search" placeholder="Search name/notes" className={`${field} w-44`} value={q} onChange={(e) => setQ(e.target.value)} />
       </div>
       <div className="flex flex-wrap items-center gap-2 text-xs text-neutral-400">
