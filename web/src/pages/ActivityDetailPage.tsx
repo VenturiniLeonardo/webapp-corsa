@@ -422,7 +422,7 @@ export default function ActivityDetailPage() {
       <Editor key={a.id} notes={a.notes ?? ''} tags={d.tags} save={patch.mutate} />
 
       {/* 10. AI report */}
-      <ActivityReport detail={d} streams={st} settings={settings.data} similar={sim} ready={!streams.isPending && !similar.isPending} />
+      <ActivityReport id={a.id} />
 
       {/* 11. sources */}
       <details className={`${surface} text-sm`}>

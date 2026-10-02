@@ -11,6 +11,7 @@ from app.core.config import get_settings
 from app.core.db import make_engine
 from app.domain.models import ActivityMetrics
 from app.metrics.engine import ALGO_VERSION
+from app.telegram import start as start_telegram
 from app.worker.queue import JobQueue
 from app.worker.runner import Runner
 
@@ -25,6 +26,7 @@ def main() -> None:
     stop = threading.Event()
     for sig in (signal.SIGINT, signal.SIGTERM):
         signal.signal(sig, lambda *_: stop.set())
+    start_telegram(engine, stop)
 
     with Session(engine) as s:  # metrics code changed since the last run: recompute everything
         if s.scalar(

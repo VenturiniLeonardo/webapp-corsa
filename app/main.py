@@ -10,6 +10,7 @@ from starlette.types import Scope
 from app.api.activities import router as activities_router
 from app.api.ai import router as ai_router
 from app.api.imports import router as imports_router
+from app.api.report import router as report_router
 from app.api.settings import router as settings_router
 from app.api.stats import router as stats_router
 from app.api.sync import router as sync_router
@@ -71,6 +72,7 @@ app.include_router(sync_router)
 app.include_router(settings_router)
 app.include_router(ai_router)
 app.include_router(imports_router)
+app.include_router(report_router)
 
 
 @app.get("/healthz")

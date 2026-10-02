@@ -12,6 +12,9 @@ class Settings(BaseSettings):
     INTERVALS_API_KEY: str = ""
     INTERVALS_ATHLETE_ID: str = "0"
     INTERVALS_BASE_URL: str = "https://intervals.icu"
+    # Telegram bot (empty token = disabled): send a file, get the TXT report back. Worker thread.
+    TELEGRAM_BOT_TOKEN: str = ""
+    TELEGRAM_CHAT_ID: str = ""  # the only chat allowed to upload; the bot tells others their id
     ALLOWED_LOGINS: Annotated[set[str], NoDecode]
     DATABASE_URL: str
     ENV: Literal["dev", "prod"]
