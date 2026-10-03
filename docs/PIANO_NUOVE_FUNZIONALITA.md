@@ -67,6 +67,7 @@ Il backend già calcola il carico giornaliero TRIMP in [`app/api/stats.py`](file
       atl: float
       tsb: float
 
+
   class LoadHistory(BaseModel):
       points: list[LoadPoint]
   ```
@@ -99,21 +100,20 @@ class Shoe(Base):
     __tablename__ = "shoes"
 
     id: Mapped[int] = mapped_column(primary_key=True)
-    name: Mapped[str] = mapped_column(Text)                         # es. "Saucony Triumph 21"
-    brand: Mapped[str | None] = mapped_column(Text)                  # es. "Saucony"
+    name: Mapped[str] = mapped_column(Text)  # es. "Saucony Triumph 21"
+    brand: Mapped[str | None] = mapped_column(Text)  # es. "Saucony"
     model: Mapped[str | None] = mapped_column(Text)
-    target_distance_m: Mapped[float] = mapped_column(REAL, default=700000.0) # 700 km
-    initial_distance_m: Mapped[float] = mapped_column(REAL, default=0.0)     # km pregressi
+    target_distance_m: Mapped[float] = mapped_column(REAL, default=700000.0)  # 700 km
+    initial_distance_m: Mapped[float] = mapped_column(REAL, default=0.0)  # km pregressi
     is_default: Mapped[bool] = mapped_column(Boolean, default=False)
-    retired_at: Mapped[str | None] = mapped_column(Text)            # data ISO ritiro o NULL
+    retired_at: Mapped[str | None] = mapped_column(Text)  # data ISO ritiro o NULL
     created_at: Mapped[str] = mapped_column(Text, default=utcnow_iso)
 ```
 
 In `Activity`:
 ```python
 shoe_id: Mapped[int | None] = mapped_column(
-    ForeignKey("shoes.id", ondelete="SET NULL", name="fk_activities_shoe"),
-    nullable=True
+    ForeignKey("shoes.id", ondelete="SET NULL", name="fk_activities_shoe"), nullable=True
 )
 ```
 
@@ -174,6 +174,7 @@ Nuovo modulo `app/api/shoes.py` registrato in [`app/main.py`](file:///C:/Users/L
       avg_hr: float | None
       has_pr: bool
 
+
   class CalendarWeekSummary(BaseModel):
       iso_week: int
       total_distance_m: float
@@ -181,11 +182,12 @@ Nuovo modulo `app/api/shoes.py` registrato in [`app/main.py`](file:///C:/Users/L
       run_count: int
       elev_gain_m: float
 
+
   class CalendarMonthOut(BaseModel):
       year: int
       month: int
-      days: dict[str, list[CalendarActivityItem]] # Chiave: "YYYY-MM-DD"
-      weeks: dict[int, CalendarWeekSummary]      # Chiave: numero settimana ISO
+      days: dict[str, list[CalendarActivityItem]]  # Chiave: "YYYY-MM-DD"
+      weeks: dict[int, CalendarWeekSummary]  # Chiave: numero settimana ISO
   ```
 
 #### 3.2 Frontend UI
@@ -284,13 +286,13 @@ class Route(Base):
     __tablename__ = "routes"
 
     id: Mapped[int] = mapped_column(primary_key=True)
-    name: Mapped[str] = mapped_column(Text)                         # es. "Lungo Colline 21K"
+    name: Mapped[str] = mapped_column(Text)  # es. "Lungo Colline 21K"
     sport_type: Mapped[str] = mapped_column(Text, default="run")
     distance_m: Mapped[float] = mapped_column(REAL)
     elev_gain_m: Mapped[float] = mapped_column(REAL)
     elev_loss_m: Mapped[float] = mapped_column(REAL)
-    points_geojson: Mapped[str] = mapped_column(Text)               # LineString GeoJSON
-    elevation_profile: Mapped[Any] = mapped_column(JSON)            # [{d_m, ele_m, grade}]
+    points_geojson: Mapped[str] = mapped_column(Text)  # LineString GeoJSON
+    elevation_profile: Mapped[Any] = mapped_column(JSON)  # [{d_m, ele_m, grade}]
     turns_count: Mapped[int] = mapped_column(Integer, default=0)
     turns_sharp: Mapped[int] = mapped_column(Integer, default=0)
     sinuosity: Mapped[float | None] = mapped_column(REAL)
