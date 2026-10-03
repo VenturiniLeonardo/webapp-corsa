@@ -83,6 +83,18 @@ class Route(Base):
     updated_at: Mapped[str] = mapped_column(Text, default=utcnow_iso, onupdate=utcnow_iso)
 
 
+class Plan(Base):
+    """Training-plan calendar: the ICS exactly as uploaded (served back verbatim), parsed on read."""
+
+    __tablename__ = "plans"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    name: Mapped[str] = mapped_column(Text, unique=True)  # X-WR-CALNAME; re-upload replaces
+    ics: Mapped[str] = mapped_column(Text)
+    created_at: Mapped[str] = mapped_column(Text, default=utcnow_iso)
+    updated_at: Mapped[str] = mapped_column(Text, default=utcnow_iso, onupdate=utcnow_iso)
+
+
 class Activity(Base):
     __tablename__ = "activities"
     __table_args__ = (

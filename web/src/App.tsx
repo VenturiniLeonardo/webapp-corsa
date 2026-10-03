@@ -5,6 +5,7 @@ import { queryClient } from './api/client'
 import Shell from './components/Shell'
 
 import ActivitiesPage from './pages/ActivitiesPage'
+import CalendarPage from './pages/CalendarPage'
 import RecordsPage from './pages/RecordsPage'
 import SettingsPage from './pages/SettingsPage'
 import SyncPage from './pages/SyncPage'
@@ -31,6 +32,7 @@ export default function App() {
                 </Suspense>
               }
             />
+            <Route path="calendar" element={<CalendarPage />} />
             <Route path="routes" element={<Suspense fallback={loading}><RoutePlannerPage /></Suspense>} />
             <Route path="records" element={<RecordsPage />} />
             <Route path="sync" element={<SyncPage />} />
