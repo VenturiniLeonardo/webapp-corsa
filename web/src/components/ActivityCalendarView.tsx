@@ -5,13 +5,13 @@ import { formatPace } from '../utils/formatters'
 import { btnGhost, FM, MUTED, surface } from './ui'
 
 // app/api/stats.py calendar_month
-type Item = { id: number; name: string | null; workout_type: string | null; distance_m: number; moving_s: number; has_pr: boolean }
+export type Item = { id: number; name: string | null; workout_type: string | null; distance_m: number; moving_s: number; has_pr: boolean }
 type Week = { total_distance_m: number; total_moving_s: number; run_count: number; elev_gain_m: number; delta_pct: number | null }
 type Month = { days: Record<string, Item[]>; weeks: Record<string, Week> }
 
 const BORDER: Record<string, string> = { easy: '#4c8dff', long: '#f59e0b', workout: '#a855f7', race: '#ef4444' }
 const DOW = ['Lun', 'Mar', 'Mer', 'Gio', 'Ven', 'Sab', 'Dom']
-const km = (m: number) => `${(m / 1000).toFixed(1)} km`
+export const km = (m: number) => `${(m / 1000).toFixed(1)} km`
 const hm = (s: number) => (s >= 3600 ? `${Math.floor(s / 3600)}h${String(Math.floor((s % 3600) / 60)).padStart(2, '0')}` : `${Math.round(s / 60)}m`)
 const pace = (r: Item) => (r.distance_m > 0 ? formatPace((r.moving_s * 1000) / r.distance_m) : '—')
 // date math in UTC so DST never shifts a day
@@ -22,7 +22,7 @@ const addDays = (s: string, n: number) => {
   return iso(d)
 }
 
-function Run({ r }: { r: Item }) {
+export function Run({ r, named }: { r: Item; named?: boolean }) {
   return (
     <Link
       to={`/activities/${r.id}`}
@@ -30,6 +30,7 @@ function Run({ r }: { r: Item }) {
       className="block rounded-md border-l-[3px] bg-[#111418] px-1.5 py-1 hover:bg-[#20252c]"
       style={{ borderColor: BORDER[r.workout_type ?? ''] ?? '#4a515c' }}
     >
+      {named && r.name && <div className="truncate text-sm text-[#eef1f4]">{r.name}</div>}
       <div className="flex items-center justify-between gap-1">
         <span className="font-mono font-bold tabular-nums text-[#eef1f4]">{km(r.distance_m)}</span>
         {r.has_pr && <span className="rounded bg-amber-500/20 px-1 text-[10px] font-bold text-amber-400">PR</span>}
