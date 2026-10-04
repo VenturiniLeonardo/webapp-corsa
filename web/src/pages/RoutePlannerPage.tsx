@@ -65,7 +65,13 @@ const BANDS: [keyof Analysis['grade_bands_m'], string, string][] = [
   ['steep', 'Salita >5%', '#ef4444'],
   ['down', 'Discesa', '#4c8dff'],
 ]
-const mono = 'font-mono tabular-nums'
+const SURF = {
+  asphalt: ['Asfalto', '#8a93a0'],
+  stone: ['Pietra / sanpietrini', '#a78bfa'],
+  unpaved: ['Sterrato', '#b45309'],
+  unknown: ['Non mappato', '#2f353e'],
+} as const
+const mono ='font-mono tabular-nums'
 const km = (m: number) => `${(m / 1000).toFixed(2)} km`
 const pct = (g: number | null) => (g == null ? '—' : `${(g * 100).toFixed(1)}%`)
 const post = (body: unknown) => ({
@@ -134,6 +140,16 @@ export default function RoutePlannerPage() {
     retry: false,
   })
   const a = flat.length >= 2 ? an.data : undefined
+  const surf = useQuery({
+    queryKey: ['route-surface', flat],
+    queryFn: () => api<{ surface_m: Record<keyof typeof SURF, number> }>('/api/routes/surface', post({ coords: flat })),
+    enabled: flat.length >= 2,
+    placeholderData: keepPreviousData,
+    staleTime: Infinity,
+    retry: false,
+  })
+  const sm = flat.length >= 2 ? surf.data?.surface_m : undefined
+  const smTot = sm ? Object.values(sm).reduce((t, v) => t + v, 0) : 0
 
   const remember = (a: Pt, b: Pt, s: Pt[]) => (cache.current.set(pairKey(a, b), s), cache.current.set(pairKey(b, a), [...s].reverse()))
   /** Set the waypoint list; segments come from the cache or are routed (foot profile) now. */
@@ -172,6 +188,12 @@ export default function RoutePlannerPage() {
     const n = [...wps]
     ;[n[i], n[j]] = [n[j], n[i]]
     void route(n)
+  }
+  /** Out-and-back: mirror waypoints and segments, no routing needed. */
+  const retrace = () => {
+    setWps([...wps, ...wps.slice(0, -1).reverse()])
+    setSegs([...segs, ...[...segs].reverse().map((s) => [...s].reverse())])
+    setSaved(false)
   }
   const live = useRef({ wps, busy, route, addPoint }) // latest state for map handlers bound once
   useEffect(() => {
@@ -413,6 +435,9 @@ export default function RoutePlannerPage() {
             <button className={btnGhost} disabled={wps.length < 2 || busy} onClick={() => addPoint(wps[0])}>
               Chiudi anello
             </button>
+            <button className={btnGhost} disabled={wps.length < 2 || busy} title="Torna al via per lo stesso percorso, a ritroso" onClick={retrace}>
+              Ritorno identico
+            </button>
             <button className={btnGhost} disabled={!wps.length || busy} onClick={() => (clear(), setEditId(null), setName(''))}>
               Nuovo
             </button>
@@ -528,6 +553,32 @@ export default function RoutePlannerPage() {
               </div>
             )}
           </Panel>
+
+          {a && (
+            <Panel title="Fondo" sub="Da tag OSM surface; strade senza tag = asfalto (stima).">
+              {sm && smTot > 0 ? (
+                <div className="space-y-2">
+                  <div className="flex h-2 overflow-hidden rounded-full bg-[#111418]">
+                    {(Object.keys(SURF) as (keyof typeof SURF)[]).map((k) => (
+                      <div key={k} style={{ width: `${(sm[k] / smTot) * 100}%`, background: SURF[k][1] }} />
+                    ))}
+                  </div>
+                  <div className="grid grid-cols-2 gap-x-3 gap-y-1 text-xs" style={{ color: MUTED }}>
+                    {(Object.keys(SURF) as (keyof typeof SURF)[]).map((k) => (
+                      <span key={k} className="flex items-center gap-1.5">
+                        <span className="size-2 rounded-full" style={{ background: SURF[k][1] }} />
+                        {SURF[k][0]} <span className={mono}>{Math.round((sm[k] / smTot) * 100)}%</span>
+                      </span>
+                    ))}
+                  </div>
+                </div>
+              ) : (
+                <p className="text-sm" style={{ color: MUTED }}>
+                  {surf.isError ? 'Dati fondo non disponibili.' : 'Calcolo…'}
+                </p>
+              )}
+            </Panel>
+          )}
 
           {a && (
             <Panel title="Simulatore" sub="Passo in piano → tempo con il dislivello (Minetti GAP).">

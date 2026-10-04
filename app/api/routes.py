@@ -3,6 +3,7 @@
 Network (server-side, no keys): Open-Meteo elevation for points without ele, OSRM foot routing
 (routing.openstreetmap.de) for snapping. Only route coordinates leave the box."""
 
+import math
 from typing import Annotated, Any
 from urllib.parse import unquote
 
@@ -16,7 +17,7 @@ from sqlalchemy.orm import Session
 from app.api.activities import Db
 from app.domain.models import Route
 from app.ingest.files import MAX_FILE, Rejected, _ln, _parse_fit, _parse_xml, _ungz
-from app.metrics.routes import Coord, analyze, resample, to_gpx
+from app.metrics.routes import SPACING_M, Coord, analyze, resample, to_gpx
 
 router = APIRouter(prefix="/api")
 ELEVATION_URL = "https://api.open-meteo.com/v1/elevation"
@@ -151,6 +152,86 @@ def snap(body: SnapIn) -> dict[str, Any]:
     except (httpx.HTTPError, KeyError, IndexError) as e:
         raise HTTPException(502, f"routing service: {type(e).__name__}") from e
     return {"coords": coords}
+
+
+SURFACE = {
+    **dict.fromkeys(("asphalt", "paved", "concrete", "concrete:plates", "concrete:lanes"), "asphalt"),
+    **dict.fromkeys(
+        ("sett", "paving_stones", "cobblestone", "unhewn_cobblestone", "bricks", "metal"), "stone"
+    ),
+    **dict.fromkeys(
+        (
+            "unpaved", "compacted", "fine_gravel", "gravel", "dirt", "earth", "ground",
+            "grass", "sand", "mud", "pebblestone", "woodchips", "wood",
+        ),
+        "unpaved",
+    ),
+}  # fmt: skip
+ROAD_HW = {
+    "motorway", "trunk", "primary", "secondary", "tertiary", "unclassified", "residential",
+    "service", "living_street", "pedestrian", "cycleway", "road",
+    *(f"{h}_link" for h in ("motorway", "trunk", "primary", "secondary", "tertiary")),
+}  # fmt: skip
+SURF_SAMPLE_M = 100
+SURF_RADIUS_M = 25
+OVERPASS_URL = "https://overpass-api.de/api/interpreter"
+
+
+def _way_surface(tags: dict[str, str]) -> str:
+    s = SURFACE.get(tags.get("surface", ""))
+    if s:
+        return s
+    return "asphalt" if tags.get("highway") in ROAD_HW else "unknown"  # est.: no surface tag
+
+
+@router.post("/routes/surface")
+def surface(body: AnalyzeIn) -> dict[str, Any]:
+    """Metres per surface class (asphalt/stone/unpaved/unknown) from OSM `surface` tags (Overpass).
+    Roads without the tag count as asphalt, paths/tracks without it as unknown."""
+    for p in body.coords:
+        if p[0] is None or p[1] is None:
+            raise HTTPException(422, "coords must be [lng, lat, ele?]")
+    pts = resample(body.coords)
+    if len(pts) < 2:
+        raise HTTPException(422, "route has zero length")
+    k = max(
+        round(SURF_SAMPLE_M / SPACING_M), len(pts) // 250 + 1
+    )  # ponytail: cap polyline ~250 pts
+    samples = pts[::k]
+    line = ",".join(f"{p[1]:.5f},{p[0]:.5f}" for p in samples)
+    q = f"[out:json][timeout:25];way(around:{SURF_RADIUS_M},{line})[highway];out tags geom;"
+    try:
+        r = httpx.post(OVERPASS_URL, data={"data": q}, timeout=30)
+        r.raise_for_status()
+        ways = r.json()["elements"]
+    except (httpx.HTTPError, KeyError, ValueError) as e:
+        raise HTTPException(502, f"overpass: {type(e).__name__}") from e
+    cos = math.cos(math.radians(samples[0][1]))  # type: ignore[arg-type]
+
+    def xy(lng: float, lat: float) -> tuple[float, float]:
+        return lng * 111320 * cos, lat * 110574
+
+    segs = [
+        (xy(a["lon"], a["lat"]), xy(b["lon"], b["lat"]), _way_surface(w.get("tags", {})))
+        for w in ways
+        for a, b in zip(w.get("geometry", []), w.get("geometry", [])[1:], strict=False)
+    ]
+
+    def dist(px: float, py: float, a: tuple[float, float], b: tuple[float, float]) -> float:
+        dx, dy = b[0] - a[0], b[1] - a[1]
+        t = (
+            0.0
+            if dx == dy == 0
+            else max(0, min(1, ((px - a[0]) * dx + (py - a[1]) * dy) / (dx * dx + dy * dy)))
+        )
+        return math.hypot(px - a[0] - t * dx, py - a[1] - t * dy)
+
+    out = dict.fromkeys(("asphalt", "stone", "unpaved", "unknown"), 0.0)
+    for p in samples:
+        px, py = xy(p[0], p[1])  # type: ignore[arg-type]
+        best = min(((dist(px, py, a, b), s) for a, b, s in segs), default=(1e9, "unknown"))
+        out[best[1] if best[0] <= SURF_RADIUS_M else "unknown"] += k * SPACING_M
+    return {"surface_m": out}
 
 
 @router.post("/routes/import-file")
