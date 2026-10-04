@@ -59,6 +59,7 @@ type RouteRow = {
   elev_loss_m: number
   target_speed_ms: number | null
   surface: SurfaceData | null
+  waypoints: number[][] | null
   updated_at: string
 }
 type RouteFull = RouteRow & { coords: Pt[] }
@@ -370,12 +371,38 @@ export default function RoutePlannerPage() {
   }, [ready, surf.data, sm, flat])
 
   const clear = () => (setWps([]), setSegs([]), setSaved(false), setErr(''))
-  const load = (coords: Pt[], n: string | null, id: number | null = null, speed: number | null = null, surface: SurfaceData | null = null) => {
-    if (surface) qc.setQueryData(['route-surface', coords], surface) // saved: no Overpass call
-    const ends = [coords[0], coords[coords.length - 1]]
-    remember(ends[0], ends[1], coords)
-    setWps(ends)
-    setSegs([coords])
+  const load = (
+    coords: Pt[],
+    n: string | null,
+    id: number | null = null,
+    speed: number | null = null,
+    surface: SurfaceData | null = null,
+    waypoints: number[][] | null = null,
+  ) => {
+    // saved waypoints: split the stored line at the point nearest each one (searching forward, so out-and-back routes work)
+    let w: Pt[] = [coords[0], coords[coords.length - 1]]
+    let sg: Pt[][] = [coords]
+    if (waypoints && waypoints.length >= 2) {
+      const idx = [0]
+      for (let i = 1; i < waypoints.length; i++) {
+        let j = coords.length - 1
+        if (i < waypoints.length - 1) {
+          let best = Infinity
+          for (let k = Math.min(idx[i - 1] + 1, coords.length - 1); k < coords.length; k++) {
+            const d = hav(coords[k], waypoints[i])
+            if (d < best) ((best = d), (j = k))
+          }
+        }
+        idx.push(j)
+      }
+      w = [coords[0], ...(waypoints.slice(1) as Pt[])]
+      sg = idx.slice(1).map((e, i) => coords.slice(idx[i], e + 1))
+      sg.forEach((x, i) => remember(w[i], w[i + 1], x))
+    } else remember(w[0], w[1], coords)
+    // seed under the exact key the planner will query with (flat), so no Overpass call
+    if (surface) qc.setQueryData(['route-surface', [w[0], ...sg.flatMap((x) => x.slice(1))]], surface)
+    setWps(w)
+    setSegs(sg)
     setErr('')
     setName(n ?? '')
     setEditId(id)
@@ -429,6 +456,7 @@ export default function RoutePlannerPage() {
         coords: flat,
         target_speed_ms: 1000 / flatPace,
         surface: surfFresh,
+        waypoints: wps.map((p) => p.slice(0, 2)),
       }
       return editId
         ? api<RouteRow>(`/api/routes/${editId}`, {
@@ -442,7 +470,7 @@ export default function RoutePlannerPage() {
   })
   const open = useMutation({
     mutationFn: (id: number) => api<RouteFull>(`/api/routes/${id}`),
-    onSuccess: (r) => load(r.coords, r.name, r.id, r.target_speed_ms, r.surface),
+    onSuccess: (r) => load(r.coords, r.name, r.id, r.target_speed_ms, r.surface, r.waypoints),
     onError: fail,
   })
   const del = useMutation({
@@ -640,7 +668,12 @@ export default function RoutePlannerPage() {
                 </div>
               ) : (
                 <p className="text-sm" style={{ color: MUTED }}>
-                  {surf.isError ? 'Dati fondo non disponibili.' : 'Calcolo…'}
+                  {surf.isError ? 'Dati fondo non disponibili (server OSM occupato). ' : 'Calcolo…'}
+                  {surf.isError && (
+                    <button className="text-[#4c8dff] hover:underline" onClick={() => void surf.refetch()}>
+                      Riprova
+                    </button>
+                  )}
                 </p>
               )}
             </Panel>

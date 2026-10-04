@@ -79,6 +79,9 @@ class Route(Base):
     elev_gain_m: Mapped[float] = mapped_column(REAL)
     elev_loss_m: Mapped[float] = mapped_column(REAL)
     target_speed_ms: Mapped[float | None] = mapped_column(REAL)  # simulator flat speed
+    waypoints: Mapped[Any] = mapped_column(
+        JSON, nullable=True
+    )  # [[lng, lat]] as placed by the user
     surface: Mapped[Any] = mapped_column(
         JSON, nullable=True
     )  # {sectors, surface_m}, saved Overpass result

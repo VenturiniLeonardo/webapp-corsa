@@ -107,9 +107,17 @@ def test_surface_sectors_saved_with_route(client, monkeypatch):  # noqa: F811
     sf = c.post("/api/routes/surface", json={"coords": coords}, headers=H).json()
     assert sf["sectors"][0]["k"] == "unpaved" and sf["surface_m"]["unpaved"] > 700
     rid = c.post(
-        "/api/routes", json={"name": "s", "coords": coords, "surface": sf}, headers=H
+        "/api/routes",
+        json={
+            "name": "s",
+            "coords": coords,
+            "surface": sf,
+            "waypoints": [[9.0, 45.0], [9.01, 45.0]],
+        },
+        headers=H,
     ).json()["id"]
     assert c.get(f"/api/routes/{rid}").json()["surface"] == sf
+    assert c.get(f"/api/routes/{rid}").json()["waypoints"] == [[9.0, 45.0], [9.01, 45.0]]
     # geometry edit without surface drops the stale one
     c.patch(f"/api/routes/{rid}", json={"coords": coords[:1] + [[9.02, 45.0, 100]]}, headers=H)
     assert c.get(f"/api/routes/{rid}").json()["surface"] is None

@@ -53,6 +53,9 @@ class RouteIn(BaseModel):
     coords: Coords | None = None
     target_speed_ms: float | None = Field(None, gt=0, le=10)
     surface: dict[str, Any] | None = None  # as returned by /routes/surface
+    waypoints: list[Annotated[list[float], Field(min_length=2, max_length=2)]] | None = Field(
+        None, max_length=500
+    )
 
 
 def fetch_elevations(pts: list[tuple[float, float]]) -> list[float]:
@@ -114,6 +117,7 @@ def _out(r: Route, full: bool = False) -> dict[str, Any]:
         "elev_loss_m": r.elev_loss_m,
         "target_speed_ms": r.target_speed_ms,
         "surface": r.surface,
+        "waypoints": r.waypoints,
         "updated_at": r.updated_at,
     }
     if full:
@@ -209,7 +213,7 @@ def surface(body: AnalyzeIn) -> dict[str, Any]:
     line = ",".join(f"{p[1]:.5f},{p[0]:.5f}" for p in samples)
     q = f"[out:json][timeout:25];way(around:{SURF_RADIUS_M},{line})[highway];out tags geom;"
     ways = None
-    for url in OVERPASS_URLS:
+    for url in OVERPASS_URLS * 2:  # ponytail: public Overpass often 504s; 2 rounds, no backoff
         try:
             r = httpx.post(url, data={"data": q}, headers=UA, timeout=35)
             r.raise_for_status()
