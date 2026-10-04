@@ -79,6 +79,9 @@ class Route(Base):
     elev_gain_m: Mapped[float] = mapped_column(REAL)
     elev_loss_m: Mapped[float] = mapped_column(REAL)
     target_speed_ms: Mapped[float | None] = mapped_column(REAL)  # simulator flat speed
+    surface: Mapped[Any] = mapped_column(
+        JSON, nullable=True
+    )  # {sectors, surface_m}, saved Overpass result
     created_at: Mapped[str] = mapped_column(Text, default=utcnow_iso)
     updated_at: Mapped[str] = mapped_column(Text, default=utcnow_iso, onupdate=utcnow_iso)
 

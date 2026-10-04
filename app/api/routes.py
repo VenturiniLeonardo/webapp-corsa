@@ -52,6 +52,7 @@ class RouteIn(BaseModel):
     notes: str | None = None
     coords: Coords | None = None
     target_speed_ms: float | None = Field(None, gt=0, le=10)
+    surface: dict[str, Any] | None = None  # as returned by /routes/surface
 
 
 def fetch_elevations(pts: list[tuple[float, float]]) -> list[float]:
@@ -112,6 +113,7 @@ def _out(r: Route, full: bool = False) -> dict[str, Any]:
         "elev_gain_m": r.elev_gain_m,
         "elev_loss_m": r.elev_loss_m,
         "target_speed_ms": r.target_speed_ms,
+        "surface": r.surface,
         "updated_at": r.updated_at,
     }
     if full:
@@ -124,6 +126,8 @@ def _apply(r: Route, body: RouteIn) -> None:
         if f != "name" or body.name is not None:
             setattr(r, f, getattr(body, f))
     if body.coords is not None:
+        if "surface" not in body.model_fields_set:
+            r.surface = None  # geometry changed: saved surface is stale
         pts = _prepare(body.coords)
         a = analyze(pts)
         r.coords = [[round(p[0], 6), round(p[1], 6), round(p[2], 1)] for p in pts]  # type: ignore[arg-type]
@@ -236,11 +240,18 @@ def surface(body: AnalyzeIn) -> dict[str, Any]:
         return math.hypot(px - a[0] - t * dx, py - a[1] - t * dy)
 
     out = dict.fromkeys(("asphalt", "stone", "unpaved", "unknown"), 0.0)
-    for p in samples:
+    sectors: list[dict[str, Any]] = []  # consecutive same-class samples merged, with geometry
+    for i, p in enumerate(samples):
         px, py = xy(p[0], p[1])  # type: ignore[arg-type]
         best = min(((dist(px, py, a, b), s) for a, b, s in segs), default=(1e9, "unknown"))
-        out[best[1] if best[0] <= SURF_RADIUS_M else "unknown"] += k * SPACING_M
-    return {"surface_m": out}
+        cls = best[1] if best[0] <= SURF_RADIUS_M else "unknown"
+        out[cls] += k * SPACING_M
+        line = [[round(q[0], 5), round(q[1], 5)] for q in pts[i * k : (i + 1) * k + 1]]  # type: ignore[arg-type,misc]
+        if sectors and sectors[-1]["k"] == cls:
+            sectors[-1]["coords"] += line[1:]
+        else:
+            sectors.append({"k": cls, "coords": line})
+    return {"surface_m": out, "sectors": [s for s in sectors if len(s["coords"]) >= 2]}
 
 
 @router.post("/routes/import-file")

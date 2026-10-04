@@ -82,3 +82,34 @@ def test_import_gpx_route_without_times(client):  # noqa: F811
     assert r.json() == {"name": "Colline", "coords": [[9.0, 45.0, 5.0], [9.0, 45.01, None]]}
     h["X-Filename"] = "c.txt"
     assert c.post("/api/routes/import-file", content=b"x", headers=h).status_code == 422
+
+
+def test_surface_sectors_saved_with_route(client, monkeypatch):  # noqa: F811
+    R = routes_api
+    c, _ = client
+
+    class Rs:
+        def raise_for_status(self):
+            pass
+
+        def json(self):
+            return {
+                "elements": [
+                    {
+                        "tags": {"highway": "path", "surface": "gravel"},
+                        "geometry": [{"lat": 45.0, "lon": 9.0}, {"lat": 45.0, "lon": 9.01}],
+                    }
+                ]
+            }
+
+    monkeypatch.setattr(R.httpx, "post", lambda *a, **k: Rs())
+    coords = [[9.0, 45.0, 100], [9.01, 45.0, 100]]
+    sf = c.post("/api/routes/surface", json={"coords": coords}, headers=H).json()
+    assert sf["sectors"][0]["k"] == "unpaved" and sf["surface_m"]["unpaved"] > 700
+    rid = c.post(
+        "/api/routes", json={"name": "s", "coords": coords, "surface": sf}, headers=H
+    ).json()["id"]
+    assert c.get(f"/api/routes/{rid}").json()["surface"] == sf
+    # geometry edit without surface drops the stale one
+    c.patch(f"/api/routes/{rid}", json={"coords": coords[:1] + [[9.02, 45.0, 100]]}, headers=H)
+    assert c.get(f"/api/routes/{rid}").json()["surface"] is None

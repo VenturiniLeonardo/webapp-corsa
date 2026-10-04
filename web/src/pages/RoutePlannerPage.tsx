@@ -46,6 +46,10 @@ type Analysis = {
     lat: number[]
   }
 }
+type SurfaceData = {
+  surface_m: Record<keyof typeof SURF, number>
+  sectors: { k: keyof typeof SURF; coords: number[][] }[]
+}
 type RouteRow = {
   id: number
   name: string
@@ -54,6 +58,7 @@ type RouteRow = {
   elev_gain_m: number
   elev_loss_m: number
   target_speed_ms: number | null
+  surface: SurfaceData | null
   updated_at: string
 }
 type RouteFull = RouteRow & { coords: Pt[] }
@@ -69,9 +74,9 @@ const SURF = {
   asphalt: ['Asfalto', '#8a93a0'],
   stone: ['Pietra / sanpietrini', '#a78bfa'],
   unpaved: ['Sterrato', '#b45309'],
-  unknown: ['Non mappato', '#2f353e'],
+  unknown: ['Non mappato', '#5b6572'],
 } as const
-const mono ='font-mono tabular-nums'
+const mono = 'font-mono tabular-nums'
 const km = (m: number) => `${(m / 1000).toFixed(2)} km`
 const pct = (g: number | null) => (g == null ? '—' : `${(g * 100).toFixed(1)}%`)
 const post = (body: unknown) => ({
@@ -142,13 +147,14 @@ export default function RoutePlannerPage() {
   const a = flat.length >= 2 ? an.data : undefined
   const surf = useQuery({
     queryKey: ['route-surface', flat],
-    queryFn: () => api<{ surface_m: Record<keyof typeof SURF, number> }>('/api/routes/surface', post({ coords: flat })),
+    queryFn: () => api<SurfaceData>('/api/routes/surface', post({ coords: flat })),
     enabled: flat.length >= 2,
     placeholderData: keepPreviousData,
     staleTime: Infinity,
     retry: false,
   })
   const sm = flat.length >= 2 ? surf.data?.surface_m : undefined
+  const surfFresh = flat.length >= 2 && surf.data && !surf.isPlaceholderData && !surf.isFetching ? surf.data : undefined // saved with the route
   const smTot = sm ? Object.values(sm).reduce((t, v) => t + v, 0) : 0
 
   const remember = (a: Pt, b: Pt, s: Pt[]) => (cache.current.set(pairKey(a, b), s), cache.current.set(pairKey(b, a), [...s].reverse()))
@@ -239,7 +245,11 @@ export default function RoutePlannerPage() {
         pts[i] = at(me)
         ;(m.getSource('wps') as GeoJSONSource).setData(wpsFc(pts))
         const near = [pts[i - 1], pts[i], pts[i + 1]].filter(Boolean).map((p) => [p[0]!, p[1]!])
-        ;(m.getSource('ghost') as GeoJSONSource).setData({ type: 'Feature', properties: {}, geometry: { type: 'LineString', coordinates: near } })
+        ;(m.getSource('ghost') as GeoJSONSource).setData({
+          type: 'Feature',
+          properties: {},
+          geometry: { type: 'LineString', coordinates: near },
+        })
       }
       m.on(ev[0], onMove)
       m.once(ev[1], () => {
@@ -266,9 +276,34 @@ export default function RoutePlannerPage() {
         layout: { 'line-cap': 'round', 'line-join': 'round' },
         paint: { 'line-width': 4, 'line-color': '#4c8dff' },
       })
-      m.addLayer({ id: 'line-hit', type: 'line', source: 'line', paint: { 'line-width': 16, 'line-opacity': 0 } }) // wider grab target
+      m.addSource('surf', { type: 'geojson', data: EMPTY })
+      m.addLayer({
+        id: 'surf',
+        type: 'line',
+        source: 'surf',
+        layout: { 'line-cap': 'round', 'line-join': 'round' },
+        paint: {
+          'line-width': 4,
+          'line-color': ['match', ['get', 'k'], ...Object.entries(SURF).flatMap(([k, v]) => [k, v[1]]), '#4c8dff'] as unknown as string,
+        },
+      })
+      m.addLayer({
+        id: 'line-hit',
+        type: 'line',
+        source: 'line',
+        paint: { 'line-width': 16, 'line-opacity': 0 },
+      }) // wider grab target
       m.addSource('ghost', { type: 'geojson', data: EMPTY })
-      m.addLayer({ id: 'ghost', type: 'line', source: 'ghost', paint: { 'line-width': 2, 'line-color': '#eef1f4', 'line-dasharray': [2, 2] } })
+      m.addLayer({
+        id: 'ghost',
+        type: 'line',
+        source: 'ghost',
+        paint: {
+          'line-width': 2,
+          'line-color': '#eef1f4',
+          'line-dasharray': [2, 2],
+        },
+      })
       m.addSource('wps', { type: 'geojson', data: EMPTY })
       m.addLayer({
         id: 'wps',
@@ -310,13 +345,33 @@ export default function RoutePlannerPage() {
     if (!ready || !m) return
     ;(m.getSource('line') as GeoJSONSource).setData({
       type: 'FeatureCollection',
-      features: segs.map((s, i) => ({ type: 'Feature', properties: { s: i }, geometry: { type: 'LineString', coordinates: s.map((p) => [p[0]!, p[1]!]) } })),
+      features: segs.map((s, i) => ({
+        type: 'Feature',
+        properties: { s: i },
+        geometry: {
+          type: 'LineString',
+          coordinates: s.map((p) => [p[0]!, p[1]!]),
+        },
+      })),
     })
     ;(m.getSource('wps') as GeoJSONSource).setData(wpsFc(wps))
   }, [ready, segs, wps])
+  useEffect(() => {
+    const m = map.current
+    if (!ready || !m) return
+    ;(m.getSource('surf') as GeoJSONSource).setData({
+      type: 'FeatureCollection',
+      features: (flat.length >= 2 ? (sm ? surf.data!.sectors : []) : []).map((s) => ({
+        type: 'Feature',
+        properties: { k: s.k },
+        geometry: { type: 'LineString', coordinates: s.coords },
+      })),
+    })
+  }, [ready, surf.data, sm, flat])
 
   const clear = () => (setWps([]), setSegs([]), setSaved(false), setErr(''))
-  const load = (coords: Pt[], n: string | null, id: number | null = null, speed: number | null = null) => {
+  const load = (coords: Pt[], n: string | null, id: number | null = null, speed: number | null = null, surface: SurfaceData | null = null) => {
+    if (surface) qc.setQueryData(['route-surface', coords], surface) // saved: no Overpass call
     const ends = [coords[0], coords[coords.length - 1]]
     remember(ends[0], ends[1], coords)
     setWps(ends)
@@ -369,7 +424,12 @@ export default function RoutePlannerPage() {
   })
   const save = useMutation({
     mutationFn: () => {
-      const body = { name, coords: flat, target_speed_ms: 1000 / flatPace }
+      const body = {
+        name,
+        coords: flat,
+        target_speed_ms: 1000 / flatPace,
+        surface: surfFresh,
+      }
       return editId
         ? api<RouteRow>(`/api/routes/${editId}`, {
             method: 'PATCH',
@@ -382,7 +442,7 @@ export default function RoutePlannerPage() {
   })
   const open = useMutation({
     mutationFn: (id: number) => api<RouteFull>(`/api/routes/${id}`),
-    onSuccess: (r) => load(r.coords, r.name, r.id, r.target_speed_ms),
+    onSuccess: (r) => load(r.coords, r.name, r.id, r.target_speed_ms, r.surface),
     onError: fail,
   })
   const del = useMutation({
@@ -560,7 +620,13 @@ export default function RoutePlannerPage() {
                 <div className="space-y-2">
                   <div className="flex h-2 overflow-hidden rounded-full bg-[#111418]">
                     {(Object.keys(SURF) as (keyof typeof SURF)[]).map((k) => (
-                      <div key={k} style={{ width: `${(sm[k] / smTot) * 100}%`, background: SURF[k][1] }} />
+                      <div
+                        key={k}
+                        style={{
+                          width: `${(sm[k] / smTot) * 100}%`,
+                          background: SURF[k][1],
+                        }}
+                      />
                     ))}
                   </div>
                   <div className="grid grid-cols-2 gap-x-3 gap-y-1 text-xs" style={{ color: MUTED }}>
