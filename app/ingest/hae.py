@@ -17,7 +17,8 @@ from app.ingest.strava_mapper import ActivityDraft, StreamDraft
 from app.worker.runner import Runner, _record
 
 SOURCE = "apple_health"
-MAPPER_VERSION = 1
+MAPPER_VERSION = 2
+MAX_SPM = 250  # above any human running cadence
 TZ = "Europe/Rome"  # ponytail: export carries only a UTC offset; single-user, fixed home zone
 KJ_PER_KCAL = 4.184
 
@@ -61,6 +62,8 @@ def _bucketed(
             if span < 5:
                 continue
             v = v * 60 / span
+            if v > MAX_SPM:  # partial bucket extrapolated from a few seconds: not a real cadence
+                continue
         out.append(((b - start).total_seconds(), v))
     return sorted(out)
 
