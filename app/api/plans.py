@@ -1,7 +1,7 @@
 """Training-plan calendars (ICS): stored verbatim, events parsed on read, served to Apple Calendar."""
 
 import re
-from datetime import UTC, datetime
+from datetime import UTC, date, datetime, timedelta
 from typing import Any
 from zoneinfo import ZoneInfo
 
@@ -109,6 +109,63 @@ def upsert_plan(body: PlanIn, s: Db) -> dict[str, Any]:
         p.ics = body.ics
     s.commit()
     return {"id": p.id, "created": created}
+
+
+class MoveIn(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    uid: str = Field(max_length=200)
+    to: str = Field(pattern=r"^\d{4}-\d{2}-\d{2}$")  # target local day
+
+
+def _shift(params: str, v: str, n: int) -> str:
+    """Move an ICS date/date-time value by n local days, keeping its form (DATE, floating/TZID, Z)."""
+    day = timedelta(days=n)
+    if "VALUE=DATE" in params or len(v) == 8:
+        return (date.fromisoformat(f"{v[:4]}-{v[4:6]}-{v[6:]}") + day).strftime("%Y%m%d")
+    home = ZoneInfo(TZ)
+    z = v.endswith("Z")
+    d = datetime.strptime(v.removesuffix("Z"), "%Y%m%dT%H%M%S").replace(tzinfo=UTC if z else None)
+    if z:  # keep the local wall clock across DST changes
+        d = (d.astimezone(home).replace(tzinfo=None) + day).replace(tzinfo=home).astimezone(UTC)
+    else:
+        d += day
+    return d.strftime("%Y%m%dT%H%M%S") + ("Z" if z else "")
+
+
+@router.patch("/plans/{pid}/move")
+def move_event(pid: int, body: MoveIn, s: Db) -> dict[str, Any]:
+    """Drag-and-drop: shift one event (and its end) to another day, editing the stored ICS in place."""
+    p = s.get(Plan, pid)
+    if p is None:
+        raise HTTPException(404, "plan not found")
+    _, events = parse_ics(p.ics)
+    ev = next((e for e in events if e.get("UID") == body.uid), None)
+    if ev is None:
+        raise HTTPException(404, "event not found")
+    try:
+        n = (date.fromisoformat(body.to) - date.fromisoformat(ev["DTSTART"][:10])).days
+    except ValueError as e:
+        raise HTTPException(422, "invalid day") from e
+    done = False
+
+    def block(m: re.Match[str]) -> str:
+        nonlocal done
+        unfolded = re.sub(r"\r?\n[ \t]", "", m[0])
+        u = re.search(r"^UID:(.*?)\r?$", unfolded, re.MULTILINE)
+        if done or not u or _text(u[1]) != body.uid:
+            return m[0]
+        done = True
+        return re.sub(
+            r"^(DTSTART|DTEND)([^:\r\n]*):(\S+)",
+            lambda x: f"{x[1]}{x[2]}:{_shift(x[2], x[3], n)}",
+            m[0],
+            flags=re.MULTILINE,
+        )
+
+    if n:
+        p.ics = re.sub(r"BEGIN:VEVENT.*?END:VEVENT", block, p.ics, flags=re.DOTALL)
+        s.commit()
+    return _out(p)
 
 
 @router.get("/plans/{pid}.ics")

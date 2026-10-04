@@ -1,4 +1,4 @@
-import { keepPreviousData, useQuery } from '@tanstack/react-query'
+import { keepPreviousData, useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { useLayoutEffect, useRef, useState } from 'react'
 import { api } from '../api/client'
 import { type Item, km, Run } from '../components/ActivityCalendarView'
@@ -103,7 +103,7 @@ function DayDetail({
           )}
         </span>
         <button className="px-1 text-[#9aa3ad] hover:text-[#eef1f4]" aria-label="Chiudi" onClick={() => ref.current?.hidePopover()}>
-          âœ•
+          ✕
         </button>
       </h3>
       <h4 className={h4} style={{ fontFamily: FM, color: MUTED }}>
@@ -120,7 +120,7 @@ function DayDetail({
             {e.start.length > 10 && (
               <span className="mr-2 font-mono text-xs tabular-nums" style={{ color: MUTED }}>
                 {e.start.slice(11)}
-                {e.end && e.end.length > 10 && `â€“${e.end.slice(11)}`}
+                {e.end && e.end.length > 10 && `–${e.end.slice(11)}`}
               </span>
             )}
             <span className="font-semibold text-[#eef1f4]">{e.summary}</span>
@@ -134,7 +134,7 @@ function DayDetail({
       </h4>
       {runs.length === 0 && (
         <p className="text-sm" style={{ color: MUTED }}>
-          {day > today ? 'â€”' : 'Nessuna corsa registrata.'}
+          {day > today ? '—' : 'Nessuna corsa registrata.'}
         </p>
       )}
       {runs.map((r) => (
@@ -151,6 +151,7 @@ function MonthGrid({
   sel,
   today,
   onPick,
+  onMove,
 }: {
   month: string
   byDay: Map<string, PlanEvent[]>
@@ -158,7 +159,9 @@ function MonthGrid({
   sel: string
   today: string
   onPick: (d: string, at: DOMRect) => void
+  onMove: (uid: string, to: string) => void
 }) {
+  const [over, setOver] = useState<string | null>(null) // drop target while dragging
   const first = `${month}-01`
   const start = monday(first)
   const len = new Date(Date.UTC(Number(month.slice(0, 4)), Number(month.slice(5, 7)), 0)).getUTCDate()
@@ -175,13 +178,33 @@ function MonthGrid({
         const evs = byDay.get(day) ?? []
         const done = runs[day] ?? []
         return (
-          <button
+          // div, not button: Firefox can't drag children of a <button>
+          <div
             key={day}
+            role="button"
+            tabIndex={0}
             onClick={(e) => onPick(day, e.currentTarget.getBoundingClientRect())}
+            onKeyDown={(e) => {
+              if (e.key === 'Enter' || e.key === ' ') {
+                e.preventDefault()
+                onPick(day, e.currentTarget.getBoundingClientRect())
+              }
+            }}
+            onDragOver={(e) => {
+              e.preventDefault() // allow drop
+              setOver(day)
+            }}
+            onDragLeave={() => setOver((o) => (o === day ? null : o))}
+            onDrop={(e) => {
+              e.preventDefault()
+              setOver(null)
+              const uid = e.dataTransfer.getData('text/plain')
+              if (uid && !evs.some((x) => x.uid === uid)) onMove(uid, day)
+            }}
             aria-pressed={day === sel}
             aria-label={`${dm(day)}: ${evs.map((e) => e.summary).join(', ') || 'nessuna seduta'}${done.length ? `; svolto ${done.map((r) => km(r.distance_m)).join(', ')}` : ''}`}
             className={`flex min-h-14 min-w-0 flex-col items-start rounded-md border p-1 text-left md:min-h-20 ${
-              day === sel ? 'border-[#4c8dff]' : 'border-[#262b33] hover:border-[#4a515c]'
+              over === day ? 'border-green-400 bg-[#16191e]' : day === sel ? 'border-[#4c8dff]' : 'border-[#262b33] hover:border-[#4a515c]'
             } ${evs.length || done.length ? 'bg-[#111418]' : ''} ${day.startsWith(month) ? '' : 'opacity-40'}`}
           >
             <span
@@ -191,20 +214,26 @@ function MonthGrid({
               {Number(day.slice(8))}
             </span>
             {evs.map((e) => (
-              <span key={e.uid ?? e.start} className="mt-0.5 hidden w-full truncate text-[11px] leading-tight text-[#eef1f4] md:block">
+              <span
+                key={e.uid ?? e.start}
+                draggable={!!e.uid}
+                onDragStart={(ev) => e.uid && ev.dataTransfer.setData('text/plain', e.uid)}
+                onDragEnd={() => setOver(null)}
+                className={`mt-0.5 hidden w-full truncate text-[11px] leading-tight text-[#eef1f4] md:block ${e.uid ? 'cursor-grab' : ''}`}
+              >
                 {e.summary}
               </span>
             ))}
             {done.map((r) => (
               <span key={r.id} className="mt-0.5 hidden w-full truncate font-mono text-[11px] leading-tight text-green-400 tabular-nums md:block">
-                âœ“ {km(r.distance_m)}
+                ✓ {km(r.distance_m)}
               </span>
             ))}
             <span className="mt-1 flex gap-1 md:hidden">
               {evs.length > 0 && <span className="h-1.5 w-1.5 rounded-full bg-[#4c8dff]" />}
               {done.length > 0 && <span className="h-1.5 w-1.5 rounded-full bg-green-400" />}
             </span>
-          </button>
+          </div>
         )
       })}
     </div>
@@ -224,6 +253,11 @@ function PlanMonth({ plan, byDay, today }: { plan: Plan; byDay: Map<string, Plan
     placeholderData: keepPreviousData,
   })
   const runs = q.data?.days ?? {}
+  const qc = useQueryClient()
+  const move = useMutation({
+    mutationFn: (v: { uid: string; to: string }) => api<Plan>(`/api/plans/${plan.id}/move`, { method: 'PATCH', body: JSON.stringify(v) }),
+    onSuccess: (np) => qc.setQueryData<Plan[]>(['/api/plans'], (ps) => ps?.map((p) => (p.id === np.id ? np : p))),
+  })
   const shift = (n: number) => {
     const d = utc(`${month}-01`)
     d.setUTCMonth(d.getUTCMonth() + n)
@@ -235,13 +269,13 @@ function PlanMonth({ plan, byDay, today }: { plan: Plan; byDay: Map<string, Plan
     <>
       <div className="mt-5 mb-3 flex items-center gap-3">
         <button className={btnGhost} aria-label="Mese precedente" onClick={() => shift(-1)}>
-          â†
+          ←
         </button>
         <span className="min-w-36 text-center font-semibold text-[#eef1f4] capitalize">
           {utc(`${month}-01`).toLocaleDateString('it-IT', { month: 'long', year: 'numeric', timeZone: 'UTC' })}
         </span>
         <button className={btnGhost} aria-label="Mese successivo" onClick={() => shift(1)}>
-          â†’
+          →
         </button>
       </div>
       <MonthGrid
@@ -250,11 +284,17 @@ function PlanMonth({ plan, byDay, today }: { plan: Plan; byDay: Map<string, Plan
         runs={runs}
         sel={day}
         today={today}
+        onMove={(uid, to) => move.mutate({ uid, to })}
         onPick={(d, r) => {
           setPick(d)
           setAt(r)
         }}
       />
+      {move.isError && (
+        <p className="mt-2 text-sm text-red-400" role="alert">
+          Spostamento non riuscito.
+        </p>
+      )}
       {at && (
         <DayDetail key={day} day={day} events={byDay.get(day) ?? []} runs={runs[day] ?? []} week={week} today={today} at={at} onClose={() => setAt(null)} />
       )}
@@ -267,7 +307,7 @@ export default function CalendarPage() {
   const [sel, setSel] = useState<number | null>(null)
   const [today] = useState(() => new Date().toLocaleDateString('sv'))
   if (isError) return <p className="text-sm text-red-400">Failed to load plans.</p>
-  if (!data) return <p className="text-sm text-neutral-500">Loadingâ€¦</p>
+  if (!data) return <p className="text-sm text-neutral-500">Loading…</p>
   // default: the plan in progress or next; else the latest
   const plan = data.find((p) => p.id === sel) ?? data.find((p) => last(p) >= today) ?? data[data.length - 1]
 
@@ -298,7 +338,7 @@ export default function CalendarPage() {
           title={plan.name}
           sub={
             <span className="tabular-nums">
-              {dm(plan.events[0].start.slice(0, 10))} {plan.events[0].start.slice(0, 4)} â€“ {dm(last(plan))} {last(plan).slice(0, 4)} Â· {plan.events.length}{' '}
+              {dm(plan.events[0].start.slice(0, 10))} {plan.events[0].start.slice(0, 4)} – {dm(last(plan))} {last(plan).slice(0, 4)} · {plan.events.length}{' '}
               sedute
             </span>
           }
@@ -317,8 +357,8 @@ export default function CalendarPage() {
             </a>
           </div>
           <p className="mt-2 text-xs" style={{ color: MUTED }}>
-            Aggiungi = iscrizione: il calendario si aggiorna da solo quando il piano cambia (sul Mac scegli la posizione Â«Sul MacÂ»: iCloud non raggiunge la
-            webapp). Scarica = file da importare a mano. Se avevi giÃ  importato il piano originale, eliminalo per non avere doppioni.
+            Aggiungi = iscrizione: il calendario si aggiorna da solo quando il piano cambia (sul Mac scegli la posizione «Sul Mac»: iCloud non raggiunge la
+            webapp). Scarica = file da importare a mano. Se avevi già importato il piano originale, eliminalo per non avere doppioni.
           </p>
           <PlanMonth key={plan.id} plan={plan} byDay={byDay} today={today} />
         </Panel>

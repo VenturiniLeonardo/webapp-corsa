@@ -72,3 +72,23 @@ def test_plan_upsert_parse_and_serve(client):  # noqa: F811
         ICS.replace("20261008T190000", "2026-10-08"),
     ):
         assert c.post("/api/plans", json={"ics": bad}, headers=H).status_code == 422, bad
+
+
+def test_plan_move_event(client):  # noqa: F811
+    c, _ = client
+    pid = c.post("/api/plans", json={"ics": ICS}, headers=H).json()["id"]
+    mv = lambda uid, to: c.patch(f"/api/plans/{pid}/move", json={"uid": uid, "to": to}, headers=H)
+    ev = {e["uid"]: e for e in mv("b", "2026-10-09").json()["events"]}
+    assert (ev["b"]["start"], ev["b"]["end"]) == ("2026-10-09T19:00", "2026-10-09T19:50")
+    assert ev["a"]["start"] == "2026-10-06T19:00"  # others untouched
+    assert mv("c", "2026-10-12").json()["events"][-1]["start"] == "2026-10-12"
+    # Z value across the CEST->CET change keeps the local wall clock
+    assert {e["uid"]: e for e in mv("a", "2026-10-28").json()["events"]}["a"][
+        "start"
+    ] == "2026-10-28T19:00"
+    assert "DTSTART:20261028T180000Z" in c.get(f"/api/plans/{pid}.ics").text
+    assert mv("zz", "2026-10-09").status_code == 404
+    assert (
+        c.patch("/api/plans/999/move", json={"uid": "a", "to": "2026-10-09"}, headers=H).status_code
+        == 404
+    )
