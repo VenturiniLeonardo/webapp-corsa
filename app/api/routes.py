@@ -174,7 +174,11 @@ ROAD_HW = {
 }  # fmt: skip
 SURF_SAMPLE_M = 100
 SURF_RADIUS_M = 25
-OVERPASS_URL = "https://overpass-api.de/api/interpreter"
+OVERPASS_URLS = (  # first is often overloaded (504): fall through to the mirror
+    "https://overpass-api.de/api/interpreter",
+    "https://maps.mail.ru/osm/tools/overpass/api/interpreter",
+)
+UA = {"User-Agent": "corsa-webapp/1.0"}  # Overpass answers 406 to generic client UAs
 
 
 def _way_surface(tags: dict[str, str]) -> str:
@@ -200,12 +204,17 @@ def surface(body: AnalyzeIn) -> dict[str, Any]:
     samples = pts[::k]
     line = ",".join(f"{p[1]:.5f},{p[0]:.5f}" for p in samples)
     q = f"[out:json][timeout:25];way(around:{SURF_RADIUS_M},{line})[highway];out tags geom;"
-    try:
-        r = httpx.post(OVERPASS_URL, data={"data": q}, timeout=30)
-        r.raise_for_status()
-        ways = r.json()["elements"]
-    except (httpx.HTTPError, KeyError, ValueError) as e:
-        raise HTTPException(502, f"overpass: {type(e).__name__}") from e
+    ways = None
+    for url in OVERPASS_URLS:
+        try:
+            r = httpx.post(url, data={"data": q}, headers=UA, timeout=35)
+            r.raise_for_status()
+            ways = r.json()["elements"]
+            break
+        except (httpx.HTTPError, KeyError, ValueError) as e:
+            err = e
+    if ways is None:
+        raise HTTPException(502, f"overpass: {type(err).__name__}") from err
     cos = math.cos(math.radians(samples[0][1]))  # type: ignore[arg-type]
 
     def xy(lng: float, lat: float) -> tuple[float, float]:
