@@ -48,7 +48,7 @@ Tutti gli sviluppi si conformano alle regole del repository:
 ### Funzionalità 1: Storico PMC (Performance Management Chart)
 
 #### 1.1 Modello Matematico e Algoritmo
-Il backend già calcola il carico giornaliero TRIMP in [`app/api/stats.py`](file:///C:/Users/Leonardo%20Venturini/Desktop/webapp-corsa/app/api/stats.py#L742):
+Il backend già calcola il carico giornaliero TRIMP in [`app/api/stats.py`](../app/api/stats.py#L742):
 - **Carico giornaliero (Edwards TRIMP)**:
   $$\text{Load} = \sum_{k=1}^5 k \cdot \frac{\text{minuti in } Z_k}{60} \quad (\text{se non c'è FC: } 2 \cdot \frac{\text{minuti in movimento}}{60})$$
 - **Aggiornamento continuo Banister (EWMA giornaliera)**:
@@ -57,7 +57,7 @@ Il backend già calcola il carico giornaliero TRIMP in [`app/api/stats.py`](file
   $$ATL_t = ATL_{t-1} + (Load_t - ATL_{t-1}) \cdot (1 - e^{-1/7})$$
   $$TSB_t = CTL_t - ATL_t$$
 
-#### 1.2 Backend API ([`app/api/stats.py`](file:///C:/Users/Leonardo%20Venturini/Desktop/webapp-corsa/app/api/stats.py))
+#### 1.2 Backend API ([`app/api/stats.py`](../app/api/stats.py))
 - Schema Pydantic:
   ```python
   class LoadPoint(BaseModel):
@@ -78,7 +78,7 @@ Il backend già calcola il carico giornaliero TRIMP in [`app/api/stats.py`](file
   - Esegue la sequenza Banister dall'origine per azzerare il transitorio di warm-up.
   - Filtra la serie restituita nell'intervallo richiesto dal selettore di periodo della dashboard.
 
-#### 1.3 Frontend UI ([`web/src/pages/DashboardPage.tsx`](file:///C:/Users/Leonardo%20Venturini/Desktop/webapp-corsa/web/src/pages/DashboardPage.tsx))
+#### 1.3 Frontend UI ([`web/src/pages/DashboardPage.tsx`](../web/src/pages/DashboardPage.tsx))
 - Componente `PmcChart`:
   - ECharts integrato con il tema Dark esistente.
   - **Asse Y1 (sinistra)**: Carico CTL (linea solida `#4c8dff`) e ATL (linea tratteggiata `#ef4444`).
@@ -93,7 +93,7 @@ Il backend già calcola il carico giornaliero TRIMP in [`app/api/stats.py`](file
 ### Funzionalità 2: Tracciamento Scarpe & Materiali (Shoe Tracker)
 
 #### 2.1 Modello Dati e Migrazione Database
-In [`app/domain/models.py`](file:///C:/Users/Leonardo%20Venturini/Desktop/webapp-corsa/app/domain/models.py):
+In [`app/domain/models.py`](../app/domain/models.py):
 
 ```python
 class Shoe(Base):
@@ -120,13 +120,13 @@ shoe_id: Mapped[int | None] = mapped_column(
 - Migrazione Alembic: `alembic revision --autogenerate -m "add_shoes_table"`
 
 #### 2.2 Pipeline di Ingestion
-In [`app/ingest/files.py`](file:///C:/Users/Leonardo%20Venturini/Desktop/webapp-corsa/app/ingest/files.py) e [`app/ingest/intervals.py`](file:///C:/Users/Leonardo%20Venturini/Desktop/webapp-corsa/app/ingest/intervals.py):
+In [`app/ingest/files.py`](../app/ingest/files.py) e [`app/ingest/intervals.py`](../app/ingest/intervals.py):
 - Quando una nuova attività viene creata senza una scarpa indicata:
   - Query sulla scarpa attiva (`retired_at IS NULL`) con `is_default == True`.
   - Assegnazione automatica del `shoe_id`.
 
 #### 2.3 Endpoints API
-Nuovo modulo `app/api/shoes.py` registrato in [`app/main.py`](file:///C:/Users/Leonardo%20Venturini/Desktop/webapp-corsa/app/main.py):
+Nuovo modulo `app/api/shoes.py` registrato in [`app/main.py`](../app/main.py):
 - `GET /api/shoes`: Elenco di tutte le scarpe con aggregazione calcolata su `activities`:
   - `total_distance_m` $= \text{initial\_distance\_m} + \sum \text{activities.distance\_m}$
   - `run_count`: Numero di uscite collegate.
@@ -135,12 +135,12 @@ Nuovo modulo `app/api/shoes.py` registrato in [`app/main.py`](file:///C:/Users/L
 - `POST /api/shoes`: Creazione nuova scarpa.
 - `PATCH /api/shoes/{id}`: Modifica metadati, cambio default o pensionamento (`retired_at`).
 - `DELETE /api/shoes/{id}`: Eliminazione permessa solo se nessuna attività è collegata (altrimenti 409 con suggerimento di pensionamento).
-- Aggiornamento di [`app/api/activities.py`](file:///C:/Users/Leonardo%20Venturini/Desktop/webapp-corsa/app/api/activities.py):
+- Aggiornamento di [`app/api/activities.py`](../app/api/activities.py):
   - Aggiunta di `shoe_id: int | None = None` nello schema `ActivityPatch`.
   - Inclusione di `shoe: ShoeSummary | None` nella risposta di dettaglio dell'attività.
 
 #### 2.4 Frontend UI
-1. **Sezione Scarpe in Impostazioni** ([`SettingsPage.tsx`](file:///C:/Users/Leonardo%20Venturini/Desktop/webapp-corsa/web/src/pages/SettingsPage.tsx)):
+1. **Sezione Scarpe in Impostazioni** ([`SettingsPage.tsx`](../web/src/pages/SettingsPage.tsx)):
    - Card per ogni scarpa con indicatore di usura a colori:
      - Verde (< 70%).
      - Arancione (70% - 90%).
@@ -148,16 +148,16 @@ Nuovo modulo `app/api/shoes.py` registrato in [`app/main.py`](file:///C:/Users/L
    - Statistiche: km totali, uscite, passo medio registrato.
    - Azioni: Imposta come predefinita, Modifica target, Ritira scarpa.
    - Form per aggiungere un nuovo paio (con supporto ai km già percorsi prima di usare l'app).
-2. **Selettore nel Dettaglio Allenamento** ([`ActivityDetailPage.tsx`](file:///C:/Users/Leonardo%20Venturini/Desktop/webapp-corsa/web/src/pages/ActivityDetailPage.tsx)):
+2. **Selettore nel Dettaglio Allenamento** ([`ActivityDetailPage.tsx`](../web/src/pages/ActivityDetailPage.tsx)):
    - Dropdown rapido nell'header dell'attività accanto a `Workout type` e `Difficoltà`.
-3. **Filtro nell'elenco corse** ([`ActivitiesPage.tsx`](file:///C:/Users/Leonardo%20Venturini/Desktop/webapp-corsa/web/src/pages/ActivitiesPage.tsx)):
+3. **Filtro nell'elenco corse** ([`ActivitiesPage.tsx`](../web/src/pages/ActivitiesPage.tsx)):
    - Aggiunta del filtro `shoe_id` nei parametri di query per filtrare tutte le sessioni corse con una specifica scarpa.
 
 ---
 
 ### Funzionalità 3: Diario a Calendario (Calendar Grid View)
 
-#### 3.1 Backend API ([`app/api/stats.py`](file:///C:/Users/Leonardo%20Venturini/Desktop/webapp-corsa/app/api/stats.py))
+#### 3.1 Backend API ([`app/api/stats.py`](../app/api/stats.py))
 - Endpoint dedicato:
   ```http
   GET /api/stats/calendar-month?year=YYYY&month=MM
@@ -191,7 +191,7 @@ Nuovo modulo `app/api/shoes.py` registrato in [`app/main.py`](file:///C:/Users/L
   ```
 
 #### 3.2 Frontend UI
-In [`web/src/pages/ActivitiesPage.tsx`](file:///C:/Users/Leonardo%20Venturini/Desktop/webapp-corsa/web/src/pages/ActivitiesPage.tsx):
+In [`web/src/pages/ActivitiesPage.tsx`](../web/src/pages/ActivitiesPage.tsx):
 - Switcher visivo nell'header: **[Tabella | Calendario]** (persistito come parametro URL `view=calendar` o `view=table`).
 - Componente `ActivityCalendarView`:
   - **Barra di navigazione mese**: Pulsanti `←` e `→`, etichetta del mese in italiano (es. *"Ottobre 2026"*), totale km del mese e media km/settimana.
@@ -209,7 +209,7 @@ In [`web/src/pages/ActivitiesPage.tsx`](file:///C:/Users/Leonardo%20Venturini/De
       - Distanza formattata in grassetto mono (es. **`10.5 km`**).
       - Passo medio e durata (es. `4:58/km · 52m`).
       - Badge compatto `PR` dorato se la corsa contiene un best effort da record.
-      - Clic sulla cella/card: navigazione diretta a [`/activities/:id`](file:///C:/Users/Leonardo%20Venturini/Desktop/webapp-corsa/web/src/pages/ActivityDetailPage.tsx).
+      - Clic sulla cella/card: navigazione diretta a [`/activities/:id`](../web/src/pages/ActivityDetailPage.tsx).
   - **Cella "Totale Settimana"**:
     - Sfondo scuro differenziato (`#191d23`).
     - Totale km settimanali in evidenza (es. **`48.2 km`**).
@@ -223,7 +223,7 @@ In [`web/src/pages/ActivitiesPage.tsx`](file:///C:/Users/Leonardo%20Venturini/De
 ### Funzionalità 4: Nuova Tab Pianificazione Percorsi (Route Planner & GPX Studio)
 
 #### 4.1 Visione e Flusso Utente
-Viene aggiunta una nuova voce nella barra di navigazione [`web/src/components/Shell.tsx`](file:///C:/Users/Leonardo%20Venturini/Desktop/webapp-corsa/web/src/components/Shell.tsx):
+Viene aggiunta una nuova voce nella barra di navigazione [`web/src/components/Shell.tsx`](../web/src/components/Shell.tsx):
 `Percorsi` (icona `Route` / `Compass`), collegata alla rotta `/routes`.
 
 L'interfaccia si compone di due modalità integrate:
@@ -254,7 +254,7 @@ L'interfaccia si compone di due modalità integrate:
 ```
 
 #### 4.2 Analisi Automatica del Tracciato (Backend & Algoritmi)
-Modulo di calcolo geometrico e morfologico in [`app/metrics/routes.py`](file:///C:/Users/Leonardo%20Venturini/Desktop/webapp-corsa/app/metrics/routes.py):
+Modulo di calcolo geometrico e morfologico in [`app/metrics/routes.py`](../app/metrics/routes.py):
 
 1. **Distanza e Geometria**:
    - Calcolo cumulativo Haversine per ogni coppia di coordinate adiacenti.
@@ -276,11 +276,11 @@ Modulo di calcolo geometrico e morfologico in [`app/metrics/routes.py`](file:///
      - Tornanti: deviazione $\theta \ge 120^\circ$
    - **Indice di Sinuosità**: $\frac{\text{Lunghezza reale tracciato}}{\text{Distanza geodetica tra inizio e fine}}$. (Se il percorso è ad anello, calcolato come rapporto tra lunghezza e perimetro del convex hull).
 4. **Simulatore Tempo & Passo Equivalente (Minetti GAP)**:
-   - Applicando il fattore energetico Minetti già presente nel motore metriche [`minetti_factor`](file:///C:/Users/Leonardo%20Venturini/Desktop/webapp-corsa/app/metrics/engine.py#L270):
+   - Applicando il fattore energetico Minetti già presente nel motore metriche [`minetti_factor`](../app/metrics/engine.py#L270):
      $$\text{Distanza equivalente GAP} = \sum \Delta d_i \cdot \text{Minetti}(g_i)$$
-   - Dato un passo target in piano scelto dall'utente (oppure ricavato automaticamente dalla soglia/VDOT recente calcolata in [`app/api/stats.py`](file:///C:/Users/Leonardo%20Venturini/Desktop/webapp-corsa/app/api/stats.py#L603)), l'app calcola il tempo totale stimato e il passo medio risultante su quel tracciato.
+   - Dato un passo target in piano scelto dall'utente (oppure ricavato automaticamente dalla soglia/VDOT recente calcolata in [`app/api/stats.py`](../app/api/stats.py#L603)), l'app calcola il tempo totale stimato e il passo medio risultante su quel tracciato.
 
-#### 4.3 Modello Dati Database ([`app/domain/models.py`](file:///C:/Users/Leonardo%20Venturini/Desktop/webapp-corsa/app/domain/models.py))
+#### 4.3 Modello Dati Database ([`app/domain/models.py`](../app/domain/models.py))
 ```python
 class Route(Base):
     __tablename__ = "routes"
@@ -313,7 +313,7 @@ class Route(Base):
 - `PATCH /api/routes/{id}` & `DELETE /api/routes/{id}`.
 
 #### 4.5 Frontend UI
-1. **Navigazione** in [`web/src/components/Shell.tsx`](file:///C:/Users/Leonardo%20Venturini/Desktop/webapp-corsa/web/src/components/Shell.tsx):
+1. **Navigazione** in [`web/src/components/Shell.tsx`](../web/src/components/Shell.tsx):
    - Aggiunta link `Pianificazione` (icona `Compass` da `lucide-react`) tra *Allenamenti* e *Record*.
 2. **Nuova Pagina** `web/src/pages/RoutePlannerPage.tsx`:
    - Mappa interattiva MapLibre con stile Dark OpenFreeMap (già configurato in `ActivityDetailPage`).

@@ -1,6 +1,6 @@
 # Implementation Prompts & Task Guide
 
-This guide breaks down the implementation of [docs/PLAN.md](file:///C:/Users/Leonardo%20Venturini/Desktop/webapp-corsa/docs/PLAN.md) into concrete, self-contained tasks.
+This guide breaks down the implementation of [docs/PLAN.md](../docs/PLAN.md) into concrete, self-contained tasks.
 Every prompt is formulated in English and strictly adheres to the official Anthropic prompt engineering guidelines for **Claude Sonnet 5.5** ([Prompting Claude Sonnet 5.5](https://platform.claude.com/docs/en/build-with-claude/prompt-engineering/prompting-claude-sonnet-5-5)) and **Claude Opus 5.5** ([Prompting Claude Opus 5.5](https://platform.claude.com/docs/en/build-with-claude/prompt-engineering/prompting-claude-opus-5-5)).
 
 ---
@@ -14,7 +14,7 @@ Every prompt is formulated in English and strictly adheres to the official Anthr
 
 ### Universal Execution Rules
 1. **Fresh Session:** Open a clean session for each milestone or major task to prevent context degradation.
-2. **Context Grounding:** Ensure [CLAUDE.md](file:///C:/Users/Leonardo%20Venturini/Desktop/webapp-corsa/CLAUDE.md) is present in the workspace root.
+2. **Context Grounding:** Ensure [CLAUDE.md](../CLAUDE.md) is present in the workspace root.
 3. **Structured XML Prompts:** All prompts use semantic XML tags (`<task>`, `<context>`, `<requirements>`, `<constraints>`, `<verification>`) to clearly delineate instructions and eliminate ambiguity.
 4. **Verification Gate:** Run the designated verification command after each task and confirm clean execution before moving forward.
 

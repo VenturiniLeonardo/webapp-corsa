@@ -15,3 +15,9 @@ export_data.zip
 *.egg-info/
 
 HealthAutoExport_*.zip
+
+# local analysis scratch, personal plans, Claude Code local config
+/analyze*.py
+/splits.py
+*.ics
+.claude/settings.local.json

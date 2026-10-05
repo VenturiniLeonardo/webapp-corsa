@@ -103,7 +103,29 @@ Docker starts on boot and containers use `restart: unless-stopped`, so no app un
 ## 2. Deploy / rollback
 
 - Deploy: `cd /opt/corsa && ./scripts/deploy.sh` (keeps last 5 `data/pre-deploy-*.db`). Tag stable releases `vX.Y.Z`.
-- Auto-deploy: push to `main` -> CI -> `deploy-prod.yml` on a self-hosted runner on the VM. Setup: GitHub repo > Settings > Actions > Runners > New self-hosted runner (Linux ARM64), install in `~/actions-runner` as the user that owns `/opt/corsa` and is in the `docker` group, then `sudo ./svc.sh install <user> && sudo ./svc.sh start`. A failing deploy leaves the old containers running only if the build fails; if `healthz` fails, roll back as below.
+- Auto-deploy: push to `main` -> CI -> within 5 min the VM pulls and deploys (`scripts/autodeploy.sh`, polls the public GitHub API for the `CI` run of `origin/main`; no self-hosted runner, the repo is public). A commit is attempted once: if build or `healthz` fails, roll back as below. Log: `journalctl -u corsa-autodeploy -n 50`. Setup:
+
+```bash
+sudo tee /etc/systemd/system/corsa-autodeploy.service >/dev/null <<'EOF'
+[Unit]
+Description=Corsa auto-deploy (origin/main with green CI)
+After=network-online.target docker.service
+[Service]
+Type=oneshot
+User=corsa
+ExecStart=/bin/bash /opt/corsa/scripts/autodeploy.sh
+EOF
+sudo tee /etc/systemd/system/corsa-autodeploy.timer >/dev/null <<'EOF'
+[Unit]
+Description=Corsa auto-deploy poll
+[Timer]
+OnBootSec=2min
+OnUnitActiveSec=5min
+[Install]
+WantedBy=timers.target
+EOF
+sudo systemctl daemon-reload && sudo systemctl enable --now corsa-autodeploy.timer
+```
 - Rollback: `git checkout <prev-tag> && ./scripts/deploy.sh` (a later push to `main` will deploy main again; `git checkout main` after fixing).
 - If the migration was not backward-compatible: `docker compose stop && cp data/pre-deploy-<ts>.db data/corsa.db && rm -f data/corsa.db-wal data/corsa.db-shm`, checkout old tag, deploy.
 
