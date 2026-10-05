@@ -250,11 +250,11 @@ def surface(body: AnalyzeIn) -> dict[str, Any]:
         best = min(((dist(px, py, a, b), s) for a, b, s in segs), default=(1e9, "unknown"))
         cls = best[1] if best[0] <= SURF_RADIUS_M else "unknown"
         out[cls] += k * SPACING_M
-        line = [[round(q[0], 5), round(q[1], 5)] for q in pts[i * k : (i + 1) * k + 1]]  # type: ignore[arg-type,misc]
+        geom = [[round(q[0], 5), round(q[1], 5)] for q in pts[i * k : (i + 1) * k + 1]]  # type: ignore[arg-type]
         if sectors and sectors[-1]["k"] == cls:
-            sectors[-1]["coords"] += line[1:]
+            sectors[-1]["coords"] += geom[1:]
         else:
-            sectors.append({"k": cls, "coords": line})
+            sectors.append({"k": cls, "coords": geom})
     return {"surface_m": out, "sectors": [s for s in sectors if len(s["coords"]) >= 2]}
 
 
