@@ -105,16 +105,16 @@ def runner_profile(s: Db, today: date) -> dict[str, Any]:
     max_hr = s.scalar(
         select(func.max(Activity.max_hr)).where(Activity.local_date >= since.isoformat())
     )
-    h = cfg.RUNNER_HEIGHT_CM / 100
+    born, cm, kg = cfg.RUNNER_BIRTH_YEAR, cfg.RUNNER_HEIGHT_CM, cfg.RUNNER_WEIGHT_KG
     return cast(
         dict[str, Any],
         _clean(
             {
                 "sex": "male",
-                "age": today.year - cfg.RUNNER_BIRTH_YEAR,
-                "height_cm": cfg.RUNNER_HEIGHT_CM,
-                "weight_kg": cfg.RUNNER_WEIGHT_KG,
-                "bmi": _r(cfg.RUNNER_WEIGHT_KG / h**2),
+                "age": today.year - born if born else None,
+                "height_cm": cm,
+                "weight_kg": kg,
+                "bmi": _r(kg / (cm / 100) ** 2) if cm and kg else None,
                 "weekly_schedule": {
                     "runs": cfg.RUNNER_RUNS_PER_WEEK,
                     "gym_strength_sessions": cfg.RUNNER_GYM_PER_WEEK,

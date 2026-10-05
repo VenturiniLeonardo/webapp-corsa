@@ -36,6 +36,7 @@ class Settings(BaseSettings):
     AI_DAILY_LIMIT: int = 40  # OpenRouter free: 50/day; margin for manual use
     AI_MINUTE_LIMIT: int = 10  # OpenRouter free: 20/min
     # Runner profile sent with every AI request (single user, ADR-15). Age/BMI derived, never stored.
+    # Body data only from .env (public repo); unset = omitted from the prompt.
     RUNNER_BIRTH_YEAR: int | None = None
     RUNNER_HEIGHT_CM: int | None = None
     RUNNER_WEIGHT_KG: float | None = None
