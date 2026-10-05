@@ -7,7 +7,10 @@ E = S + timedelta(minutes=5)
 
 
 def test_partial_bucket_not_extrapolated_to_nonsense():
-    items = [{"date": "2026-10-04 08:00:00 +0200", "qty": 90}, {"date": "2026-10-04 08:01:00 +0200", "qty": 170}]
+    items = [
+        {"date": "2026-10-04 08:00:00 +0200", "qty": 90},
+        {"date": "2026-10-04 08:01:00 +0200", "qty": 170},
+    ]
     out = _bucketed(items, "qty", S, E, True)
     assert all(v <= MAX_SPM for _, v in out)
     # 5s overlap, 90 steps counted -> 1080 spm: dropped
