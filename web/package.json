@@ -15,7 +15,7 @@
   "dependencies": {
     "@tanstack/react-query": "^5.104.0",
     "echarts": "^6.1.0",
-    "lucide-react": "^1.49.0",
+    "lucide-react": "^1.52.0",
     "maplibre-gl": "^6.11.2",
     "react": "^19.2.8",
     "react-dom": "^19.2.8",
