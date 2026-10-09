@@ -1,7 +1,7 @@
 import { keepPreviousData, useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import * as echarts from 'echarts'
 import type { FeatureCollection } from 'geojson'
-import { ArrowDown, ArrowUp, X } from 'lucide-react'
+import { ArrowDown, ArrowUp, Hand, Pencil, X } from 'lucide-react'
 import {
   type GeoJSONSource,
   LngLatBounds,
@@ -19,6 +19,7 @@ import { type ReactNode, useEffect, useMemo, useRef, useState } from 'react'
 import { api } from '../api/client'
 import { btn, btnGhost, field, FM, MUTED, PageHead, Panel, pill } from '../components/ui'
 import { formatDuration, formatPace } from '../utils/formatters'
+import { routeSection } from '../utils/routeSection'
 
 setWorkerUrl(mlWorkerUrl)
 
@@ -106,6 +107,8 @@ export default function RoutePlannerPage() {
   const [segs, setSegs] = useState<Pt[][]>([]) // segs[i]: wps[i] → wps[i+1]
   const cache = useRef(new Map<string, Pt[]>()) // per waypoint pair, so reorder/remove only routes new pairs
   const [snapMode, setSnapMode] = useState(true)
+  const [mapMode, setMapMode] = useState<'edit' | 'pan'>('edit')
+  const [selection, setSelection] = useState<{ profile: Analysis['profile']; range: [number, number] } | null>(null)
   const [busy, setBusy] = useState(false)
   const [err, setErr] = useState('')
   const [editId, setEditId] = useState<number | null>(null)
@@ -146,6 +149,8 @@ export default function RoutePlannerPage() {
     retry: false,
   })
   const a = flat.length >= 2 ? an.data : undefined
+  const selectedRange = a && !an.isPlaceholderData && selection?.profile === a.profile ? selection.range : null
+  const section = useMemo(() => a && selectedRange ? routeSection(a.profile, selectedRange) : null, [a, selectedRange])
   const surf = useQuery({
     queryKey: ['route-surface', flat],
     queryFn: () => api<SurfaceData>('/api/routes/surface', post({ coords: flat })),
@@ -187,6 +192,7 @@ export default function RoutePlannerPage() {
     }
     setWps(next)
     setSegs(out)
+    setSelection(null)
     setSaved(false)
     setErr(failed ? 'Routing non disponibile: alcuni tratti sono in linea retta.' : '')
   }
@@ -198,13 +204,14 @@ export default function RoutePlannerPage() {
   }
   /** Out-and-back: mirror waypoints and segments, no routing needed. */
   const retrace = () => {
+    setSelection(null)
     setWps([...wps, ...wps.slice(0, -1).reverse()])
     setSegs([...segs, ...[...segs].reverse().map((s) => [...s].reverse())])
     setSaved(false)
   }
-  const live = useRef({ wps, busy, route, addPoint }) // latest state for map handlers bound once
+  const live = useRef({ wps, busy, route, addPoint, mapMode }) // latest state for map handlers bound once
   useEffect(() => {
-    live.current = { wps, busy, route, addPoint }
+    live.current = { wps, busy, route, addPoint, mapMode }
   })
 
   // --- map ---
@@ -228,12 +235,13 @@ export default function RoutePlannerPage() {
     })
     m.getCanvas().style.cursor = 'crosshair'
     m.on('click', (e) => {
+      if (live.current.mapMode !== 'edit' || live.current.busy || !m.getLayer('wps')) return
       if (!m.queryRenderedFeatures(e.point, { layers: ['wps', 'line-hit'] }).length) live.current.addPoint([e.lngLat.lng, e.lngLat.lat])
     })
     // drag a waypoint to move it; press on the line to insert one there (drag or just tap)
     const drag = (e: MapLayerMouseEvent | MapLayerTouchEvent, insert: boolean) => {
       const f = e.features?.[0]
-      if (!f || live.current.busy || ('points' in e && e.points.length > 1)) return
+      if (!f || live.current.mapMode !== 'edit' || live.current.busy || ('points' in e && e.points.length > 1)) return
       e.preventDefault() // no map pan while dragging
       const at = (ev: MapMouseEvent | MapTouchEvent): Pt => [ev.lngLat.lng, ev.lngLat.lat]
       const w = live.current.wps
@@ -265,8 +273,8 @@ export default function RoutePlannerPage() {
     ] as const) {
       m.on('mousedown', layer, (e) => drag(e, insert))
       m.on('touchstart', layer, (e) => drag(e, insert))
-      m.on('mouseenter', layer, () => (m.getCanvas().style.cursor = insert ? 'copy' : 'grab'))
-      m.on('mouseleave', layer, () => (m.getCanvas().style.cursor = 'crosshair'))
+      m.on('mouseenter', layer, () => (m.getCanvas().style.cursor = live.current.mapMode === 'pan' ? 'grab' : insert ? 'copy' : 'grab'))
+      m.on('mouseleave', layer, () => (m.getCanvas().style.cursor = live.current.mapMode === 'pan' ? 'grab' : 'crosshair'))
     }
     m.on('load', () => {
       m.addSource('line', { type: 'geojson', data: EMPTY })
@@ -294,6 +302,12 @@ export default function RoutePlannerPage() {
         source: 'line',
         paint: { 'line-width': 16, 'line-opacity': 0 },
       }) // wider grab target
+      m.addSource('selection', { type: 'geojson', data: EMPTY })
+      m.addLayer({
+        id: 'selection', type: 'line', source: 'selection',
+        layout: { 'line-cap': 'round', 'line-join': 'round' },
+        paint: { 'line-width': 7, 'line-color': '#facc15' },
+      })
       m.addSource('ghost', { type: 'geojson', data: EMPTY })
       m.addLayer({
         id: 'ghost',
@@ -342,6 +356,16 @@ export default function RoutePlannerPage() {
     }
   }, [])
   useEffect(() => {
+    if (map.current) map.current.getCanvas().style.cursor = mapMode === 'pan' ? 'grab' : 'crosshair'
+  }, [mapMode])
+  useEffect(() => {
+    if (!ready || !map.current) return
+    ;(map.current.getSource('selection') as GeoJSONSource).setData(section ? {
+      type: 'Feature', properties: {}, geometry: { type: 'LineString', coordinates: section.coords },
+    } : EMPTY)
+    marker.current?.remove()
+  }, [ready, section])
+  useEffect(() => {
     const m = map.current
     if (!ready || !m) return
     ;(m.getSource('line') as GeoJSONSource).setData({
@@ -370,7 +394,7 @@ export default function RoutePlannerPage() {
     })
   }, [ready, surf.data, sm, flat])
 
-  const clear = () => (setWps([]), setSegs([]), setSaved(false), setErr(''))
+  const clear = () => (setWps([]), setSegs([]), setSelection(null), setSaved(false), setErr(''))
   const load = (
     coords: Pt[],
     n: string | null,
@@ -403,6 +427,7 @@ export default function RoutePlannerPage() {
     if (surface) qc.setQueryData(['route-surface', [w[0], ...sg.flatMap((x) => x.slice(1))]], surface)
     setWps(w)
     setSegs(sg)
+    setSelection(null)
     setErr('')
     setName(n ?? '')
     setEditId(id)
@@ -535,7 +560,20 @@ export default function RoutePlannerPage() {
               </span>
             )}
           </div>
-          <div ref={el} className="h-[55vh] min-h-72 w-full overflow-hidden rounded-[14px]" />
+          <div className="relative">
+            <div ref={el} className="h-[55vh] min-h-72 w-full overflow-hidden rounded-[14px]" />
+            <div role="group" aria-label="Modalità mappa" className="absolute top-3 left-3 flex gap-1 rounded-full border border-[#262b33] bg-[#111418] p-1 shadow-lg">
+              <button className={`${pill(mapMode === 'edit')} flex items-center gap-2`} aria-pressed={mapMode === 'edit'} disabled={busy} onClick={() => setMapMode('edit')} title="Aggiungi punti e modifica il percorso">
+                <Pencil size={16} aria-hidden="true" /> Modifica
+              </button>
+              <button className={`${pill(mapMode === 'pan')} flex items-center gap-2`} aria-pressed={mapMode === 'pan'} disabled={busy} onClick={() => setMapMode('pan')} title="Sposta la mappa trascinandola">
+                <Hand size={16} aria-hidden="true" /> Sposta
+              </button>
+            </div>
+          </div>
+          <p className="text-sm" style={{ color: MUTED }}>
+            {mapMode === 'edit' ? 'Modifica: clicca per aggiungere punti; trascina un punto per spostarlo o la linea per inserirne uno.' : 'Sposta: trascina la mappa con la mano per esplorare il percorso.'}
+          </p>
           {!wps.length && (
             <p className="text-sm" style={{ color: MUTED }}>
               Clicca sulla mappa per posizionare la partenza, poi i waypoint.
@@ -543,9 +581,11 @@ export default function RoutePlannerPage() {
           )}
           {err && <p className="text-sm text-red-400">{err}</p>}
           {an.isError && flat.length >= 2 && <p className="text-sm text-red-400">Analisi non disponibile ({(an.error as Error).message}).</p>}
-          {a && (
+          {a && !an.isPlaceholderData && (
             <Profile
               a={a}
+              selection={selectedRange}
+              onSelect={(range) => setSelection(range ? { profile: a.profile, range } : null)}
               onHover={(i) =>
                 i == null ? marker.current?.remove() : map.current && marker.current?.setLngLat([a.profile.lng[i], a.profile.lat[i]]).addTo(map.current)
               }
@@ -554,6 +594,17 @@ export default function RoutePlannerPage() {
         </div>
 
         <div className="space-y-5">
+          {section && (
+            <Panel title="Tratto selezionato" sub={`Da ${km(section.start)} a ${km(section.end)} · evidenziato in giallo sulla mappa`}>
+              <dl className="grid grid-cols-2 gap-3">
+                <Stat label="Distanza" value={km(section.distance)} />
+                <Stat label="D+ / D−" value={`${Math.round(section.gain)} / ${Math.round(section.loss)} m`} />
+                <Stat label="Quota min–max" value={`${Math.round(section.min)}–${Math.round(section.max)} m`} />
+                <Stat label="Pendenza media" value={pct(section.grade)} sub="Variazione di quota / distanza" />
+              </dl>
+              <button className={`${btnGhost} mt-3`} onClick={() => setSelection(null)}>Rimuovi selezione</button>
+            </Panel>
+          )}
           {wps.length > 0 && (
             <Panel title="Punti" sub="Clic sulla mappa: aggiungi in coda. Trascina un punto per spostarlo, trascina o tocca la linea per inserirne uno.">
               <ol className="max-h-72 space-y-1 overflow-y-auto text-sm">
@@ -729,7 +780,7 @@ export default function RoutePlannerPage() {
       </div>
 
       <Panel title="Percorsi salvati">
-        {routes.isError && <p className="text-sm text-red-400">Failed to load routes.</p>}
+        {routes.isError && <p className="text-sm text-red-400">Impossibile caricare i percorsi.</p>}
         {routes.data?.length === 0 && (
           <p className="text-sm" style={{ color: MUTED }}>
             Nessun percorso salvato.
@@ -777,21 +828,33 @@ function Stat({ label, value, sub }: { label: string; value: ReactNode; sub?: st
   )
 }
 
-/** Elevation profile; hovering reports the sample index so the map marker follows. */
-function Profile({ a, onHover }: { a: Analysis; onHover: (i: number | null) => void }) {
+/** Hover follows the route; a horizontal brush selects a distance interval. */
+function Profile({ a, onHover, selection, onSelect }: {
+  a: Analysis
+  onHover: (i: number | null) => void
+  selection: [number, number] | null
+  onSelect: (range: [number, number] | null) => void
+}) {
   const el = useRef<HTMLDivElement>(null)
   const inst = useRef<echarts.ECharts | null>(null)
   const hover = useRef(onHover)
+  const select = useRef(onSelect)
   const p = a.profile
   const dist = useRef(p.d)
   useEffect(() => {
     hover.current = onHover
+    select.current = onSelect
     dist.current = p.d
   })
 
   useEffect(() => {
     const c = echarts.init(el.current!)
     inst.current = c
+    c.on('brushEnd', (e: unknown) => {
+      const range = (e as { areas?: { coordRange?: number[] }[] }).areas?.[0]?.coordRange
+      select.current(range?.length === 2 && range.every(Number.isFinite) && range[0] !== range[1]
+        ? [Math.min(...range) * 1000, Math.max(...range) * 1000] : null)
+    })
     c.on('updateAxisPointer', (e: unknown) => {
       const v = (e as { axesInfo?: { value: number }[] }).axesInfo?.[0]?.value
       if (typeof v !== 'number') return
@@ -818,6 +881,11 @@ function Profile({ a, onHover }: { a: Analysis; onHover: (i: number | null) => v
     inst.current?.setOption(
       {
         grid: { left: 44, right: 12, top: 12, bottom: 28 },
+        brush: {
+          toolbox: [], xAxisIndex: 0, brushType: 'lineX', brushMode: 'single',
+          removeOnClick: true,
+          brushStyle: { color: 'rgba(250,204,21,0.18)', borderColor: '#facc15', borderWidth: 1 },
+        },
         tooltip: {
           trigger: 'axis',
           backgroundColor: '#191d23',
@@ -852,7 +920,17 @@ function Profile({ a, onHover }: { a: Analysis; onHover: (i: number | null) => v
       },
       true,
     )
+    inst.current?.dispatchAction({ type: 'takeGlobalCursor', key: 'brush', brushOption: { brushType: 'lineX', brushMode: 'single' } })
   }, [p])
 
-  return <div ref={el} className="h-44 w-full rounded-[14px] bg-[#191d23]" />
+  useEffect(() => {
+    inst.current?.dispatchAction({ type: 'brush', areas: selection ? [{ brushType: 'lineX', xAxisIndex: 0, coordRange: selection.map((d) => d / 1000) }] : [] })
+  }, [selection, p])
+
+  return (
+    <div className="space-y-2">
+      <p className="text-sm" style={{ color: MUTED }}>Trascina sul profilo altimetrico per selezionare un tratto e vederne i dettagli.</p>
+      <div ref={el} aria-label="Profilo altimetrico: trascina per selezionare un tratto" className="h-44 w-full touch-none rounded-[14px] bg-[#191d23]" />
+    </div>
+  )
 }
