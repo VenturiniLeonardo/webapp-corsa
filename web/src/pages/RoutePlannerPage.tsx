@@ -20,6 +20,7 @@ import { api } from '../api/client'
 import { btn, btnGhost, field, FM, MUTED, PageHead, Panel, pill } from '../components/ui'
 import { formatDuration, formatPace } from '../utils/formatters'
 import { routeSection } from '../utils/routeSection'
+import { routeInsights } from '../utils/routeInsights'
 
 setWorkerUrl(mlWorkerUrl)
 
@@ -108,6 +109,7 @@ export default function RoutePlannerPage() {
   const cache = useRef(new Map<string, Pt[]>()) // per waypoint pair, so reorder/remove only routes new pairs
   const [snapMode, setSnapMode] = useState(true)
   const [mapMode, setMapMode] = useState<'edit' | 'pan'>('edit')
+  const [viewOnly, setViewOnly] = useState(false)
   const [selection, setSelection] = useState<{ profile: Analysis['profile']; range: [number, number] } | null>(null)
   const [busy, setBusy] = useState(false)
   const [err, setErr] = useState('')
@@ -149,6 +151,7 @@ export default function RoutePlannerPage() {
     retry: false,
   })
   const a = flat.length >= 2 ? an.data : undefined
+  const insights = useMemo(() => a && !an.isPlaceholderData ? routeInsights(a.profile) : null, [a, an.isPlaceholderData])
   const selectedRange = a && !an.isPlaceholderData && selection?.profile === a.profile ? selection.range : null
   const section = useMemo(() => a && selectedRange ? routeSection(a.profile, selectedRange) : null, [a, selectedRange])
   const surf = useQuery({
@@ -166,7 +169,7 @@ export default function RoutePlannerPage() {
   const remember = (a: Pt, b: Pt, s: Pt[]) => (cache.current.set(pairKey(a, b), s), cache.current.set(pairKey(b, a), [...s].reverse()))
   /** Set the waypoint list; segments come from the cache or are routed (foot profile) now. */
   const route = async (next: Pt[]) => {
-    if (busy) return
+    if (busy || viewOnly) return
     const out: Pt[][] = []
     let failed = false
     setBusy(true)
@@ -209,9 +212,9 @@ export default function RoutePlannerPage() {
     setSegs([...segs, ...[...segs].reverse().map((s) => [...s].reverse())])
     setSaved(false)
   }
-  const live = useRef({ wps, busy, route, addPoint, mapMode }) // latest state for map handlers bound once
+  const live = useRef({ wps, busy, route, addPoint, mapMode, viewOnly }) // latest state for map handlers bound once
   useEffect(() => {
-    live.current = { wps, busy, route, addPoint, mapMode }
+    live.current = { wps, busy, route, addPoint, mapMode, viewOnly }
   })
 
   // --- map ---
@@ -235,13 +238,13 @@ export default function RoutePlannerPage() {
     })
     m.getCanvas().style.cursor = 'crosshair'
     m.on('click', (e) => {
-      if (live.current.mapMode !== 'edit' || live.current.busy || !m.getLayer('wps')) return
+      if (live.current.viewOnly || live.current.mapMode !== 'edit' || live.current.busy || !m.getLayer('wps')) return
       if (!m.queryRenderedFeatures(e.point, { layers: ['wps', 'line-hit'] }).length) live.current.addPoint([e.lngLat.lng, e.lngLat.lat])
     })
     // drag a waypoint to move it; press on the line to insert one there (drag or just tap)
     const drag = (e: MapLayerMouseEvent | MapLayerTouchEvent, insert: boolean) => {
       const f = e.features?.[0]
-      if (!f || live.current.mapMode !== 'edit' || live.current.busy || ('points' in e && e.points.length > 1)) return
+      if (!f || live.current.viewOnly || live.current.mapMode !== 'edit' || live.current.busy || ('points' in e && e.points.length > 1)) return
       e.preventDefault() // no map pan while dragging
       const at = (ev: MapMouseEvent | MapTouchEvent): Pt => [ev.lngLat.lng, ev.lngLat.lat]
       const w = live.current.wps
@@ -394,7 +397,7 @@ export default function RoutePlannerPage() {
     })
   }, [ready, surf.data, sm, flat])
 
-  const clear = () => (setWps([]), setSegs([]), setSelection(null), setSaved(false), setErr(''))
+  const clear = () => (setWps([]), setSegs([]), setSelection(null), setViewOnly(false), setMapMode('edit'), setSaved(false), setErr(''))
   const load = (
     coords: Pt[],
     n: string | null,
@@ -402,6 +405,7 @@ export default function RoutePlannerPage() {
     speed: number | null = null,
     surface: SurfaceData | null = null,
     waypoints: number[][] | null = null,
+    viewing = false,
   ) => {
     // saved waypoints: split the stored line at the point nearest each one (searching forward, so out-and-back routes work)
     let w: Pt[] = [coords[0], coords[coords.length - 1]]
@@ -427,6 +431,8 @@ export default function RoutePlannerPage() {
     if (surface) qc.setQueryData(['route-surface', [w[0], ...sg.flatMap((x) => x.slice(1))]], surface)
     setWps(w)
     setSegs(sg)
+    setViewOnly(viewing)
+    setMapMode(viewing ? 'pan' : 'edit')
     setSelection(null)
     setErr('')
     setName(n ?? '')
@@ -494,8 +500,8 @@ export default function RoutePlannerPage() {
     onError: fail,
   })
   const open = useMutation({
-    mutationFn: (id: number) => api<RouteFull>(`/api/routes/${id}`),
-    onSuccess: (r) => load(r.coords, r.name, r.id, r.target_speed_ms, r.surface, r.waypoints),
+    mutationFn: ({ id }: { id: number; viewing: boolean }) => api<RouteFull>(`/api/routes/${id}`),
+    onSuccess: (r, { viewing }) => load(r.coords, r.name, r.id, r.target_speed_ms, r.surface, r.waypoints, viewing),
     onError: fail,
   })
   const del = useMutation({
@@ -531,7 +537,14 @@ export default function RoutePlannerPage() {
 
       <div className="grid gap-5 lg:grid-cols-[minmax(0,1fr)_340px]">
         <div className="min-w-0 space-y-3">
-          <div className="flex flex-wrap items-center gap-2">
+          {viewOnly && (
+            <div className="flex flex-wrap items-center gap-3 rounded-[14px] bg-[#191d23] p-3">
+              <span className="min-w-0 flex-1 text-sm text-[#eef1f4]">Visualizzazione: <strong>{name}</strong></span>
+              <button className={btnGhost} onClick={() => (setViewOnly(false), setMapMode('edit'))}>Modifica percorso</button>
+              <button className={btnGhost} onClick={() => (clear(), setEditId(null), setName(''))}>Nuovo</button>
+            </div>
+          )}
+          {!viewOnly && <div className="flex flex-wrap items-center gap-2">
             <button className={pill(snapMode)} title="Routing pedonale OSM: marciapiedi, sentieri, parchi; evita superstrade" onClick={() => setSnapMode(true)}>
               A piedi su strade e sentieri
             </button>
@@ -559,11 +572,11 @@ export default function RoutePlannerPage() {
                 routing…
               </span>
             )}
-          </div>
+          </div>}
           <div className="relative">
             <div ref={el} className="h-[55vh] min-h-72 w-full overflow-hidden rounded-[14px]" />
             <div role="group" aria-label="Modalità mappa" className="absolute top-3 left-3 flex gap-1 rounded-full border border-[#262b33] bg-[#111418] p-1 shadow-lg">
-              <button className={`${pill(mapMode === 'edit')} flex items-center gap-2`} aria-pressed={mapMode === 'edit'} disabled={busy} onClick={() => setMapMode('edit')} title="Aggiungi punti e modifica il percorso">
+              <button className={`${pill(mapMode === 'edit')} flex items-center gap-2`} aria-pressed={mapMode === 'edit'} disabled={busy || viewOnly} onClick={() => setMapMode('edit')} title="Aggiungi punti e modifica il percorso">
                 <Pencil size={16} aria-hidden="true" /> Modifica
               </button>
               <button className={`${pill(mapMode === 'pan')} flex items-center gap-2`} aria-pressed={mapMode === 'pan'} disabled={busy} onClick={() => setMapMode('pan')} title="Sposta la mappa trascinandola">
@@ -606,7 +619,7 @@ export default function RoutePlannerPage() {
             </Panel>
           )}
           {wps.length > 0 && (
-            <Panel title="Punti" sub="Clic sulla mappa: aggiungi in coda. Trascina un punto per spostarlo, trascina o tocca la linea per inserirne uno.">
+            <Panel title="Punti" sub={viewOnly ? 'Punti del percorso salvato.' : 'Clic sulla mappa: aggiungi in coda. Trascina un punto per spostarlo, trascina o tocca la linea per inserirne uno.'}>
               <ol className="max-h-72 space-y-1 overflow-y-auto text-sm">
                 {wps.map((_, i) => (
                   <li key={i} className="flex items-center gap-2 rounded-md px-1 py-0.5 hover:bg-[#20252c]">
@@ -623,6 +636,7 @@ export default function RoutePlannerPage() {
                         </span>
                       )}
                     </span>
+                    {!viewOnly && <>
                     <button
                       className="p-1 text-[#8a93a0] hover:text-[#eef1f4] disabled:opacity-30"
                       aria-label={`Sposta su il punto ${i + 1}`}
@@ -647,6 +661,7 @@ export default function RoutePlannerPage() {
                     >
                       <X size={14} />
                     </button>
+                    </>}
                   </li>
                 ))}
               </ol>
@@ -667,6 +682,9 @@ export default function RoutePlannerPage() {
                   <Stat label="Pend. salita (max)" value={`${pct(a.climb_grade_avg)} (${pct(a.grade_max)})`} />
                   <Stat label="Curve" value={`${a.turns}`} sub={`${a.turns_sharp} a gomito · ${a.hairpins} tornanti`} />
                   <Stat label="Sinuosità" value={a.sinuosity?.toFixed(2) ?? '—'} />
+                  <Stat label="Quota partenza / arrivo" value={`${Math.round(a.profile.ele[0])} / ${Math.round(a.profile.ele[a.profile.ele.length - 1])} m`} />
+                  <Stat label="D+ per km" value={a.distance_m > 0 ? `${Math.round(a.elev_gain_m / (a.distance_m / 1000))} m/km` : '—'} sub="Dislivello positivo / distanza" />
+                  <Stat label="Discesa più ripida" value={pct(insights?.maxDescent ?? null)} sub="Pendenza del profilo smussato" />
                 </dl>
                 <div>
                   <div className="flex h-2 overflow-hidden rounded-full bg-[#111418]">
@@ -692,6 +710,30 @@ export default function RoutePlannerPage() {
               </div>
             )}
           </Panel>
+
+          {a && insights && (
+            <Panel title="Salite e discese" sub="Tratti continui con pendenza oltre +2% o sotto −2%, calcolati dal profilo smussato.">
+              <div className="space-y-4 text-sm">
+                {([
+                  ['Salita continua più lunga', insights.climb],
+                  ['Discesa continua più lunga', insights.descent],
+                ] as const).map(([label, stretch]) => (
+                  <div key={label}>
+                    <p className="mb-1 font-semibold text-[#eef1f4]">{label}</p>
+                    {stretch ? (
+                      <>
+                        <p className={mono} style={{ color: MUTED }}>{km(stretch.distance)} · {pct(stretch.grade)} media</p>
+                        <p className="text-xs" style={{ color: MUTED }}>Dal km {(stretch.start / 1000).toFixed(2)} al km {(stretch.end / 1000).toFixed(2)}</p>
+                        <button className={`${btnGhost} mt-2`} aria-label={`Evidenzia ${label.toLowerCase()}`} onClick={() => setSelection({ profile: a.profile, range: [stretch.start, stretch.end] })}>
+                          Evidenzia tratto
+                        </button>
+                      </>
+                    ) : <p style={{ color: MUTED }}>Nessun tratto con questa pendenza.</p>}
+                  </div>
+                ))}
+              </div>
+            </Panel>
+          )}
 
           {a && (
             <Panel title="Fondo" sub="Da tag OSM surface; strade senza tag = asfalto (stima).">
@@ -740,6 +782,7 @@ export default function RoutePlannerPage() {
                   max={480}
                   step={5}
                   value={Math.round(flatPace)}
+                  disabled={viewOnly}
                   onChange={(e) => (setPace(Number(e.target.value)), setSaved(false))}
                   className="mt-2 w-full accent-[#4c8dff]"
                 />
@@ -747,11 +790,12 @@ export default function RoutePlannerPage() {
               <dl className="mt-3 grid grid-cols-2 gap-3 text-sm">
                 <Stat label="Tempo stimato" value={formatDuration(estS)} />
                 <Stat label="Passo medio" value={formatPace(estS / (a.distance_m / 1000))} />
+                <Stat label="Equivalente in piano" value={km(a.gap_distance_m)} sub="Distanza stimata dal modello Minetti" />
               </dl>
             </Panel>
           )}
 
-          {a && (
+          {a && !viewOnly && (
             <Panel title="Salva">
               <form className="flex flex-wrap items-center gap-2" onSubmit={(e) => (e.preventDefault(), name.trim() && save.mutate())}>
                 <input
@@ -776,6 +820,12 @@ export default function RoutePlannerPage() {
               )}
             </Panel>
           )}
+          {viewOnly && editId && (
+            <Panel title="Percorso salvato">
+              <p className="mb-3 text-sm text-[#eef1f4]">{name}</p>
+              <a className={btnGhost} href={`/api/routes/${editId}/export-gpx`} download>Esporta GPX</a>
+            </Panel>
+          )}
         </div>
       </div>
 
@@ -793,8 +843,11 @@ export default function RoutePlannerPage() {
               <div className={`${mono} mt-1 text-xs`} style={{ color: MUTED }}>
                 {km(r.distance_m)} · {Math.round(r.elev_gain_m)} m D+ · {r.updated_at.slice(0, 10)}
               </div>
-              <div className="mt-2 flex gap-3 text-xs">
-                <button className="text-[#4c8dff] hover:underline" onClick={() => open.mutate(r.id)}>
+              <div className="mt-2 flex flex-wrap gap-3 text-xs">
+                <button className="text-[#4c8dff] hover:underline" disabled={busy || open.isPending} onClick={() => open.mutate({ id: r.id, viewing: true })}>
+                  Visualizza
+                </button>
+                <button className="text-[#4c8dff] hover:underline" disabled={busy || open.isPending} onClick={() => open.mutate({ id: r.id, viewing: false })}>
                   Modifica
                 </button>
                 <a className="text-[#4c8dff] hover:underline" href={`/api/routes/${r.id}/export-gpx`} download>
