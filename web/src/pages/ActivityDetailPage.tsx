@@ -14,6 +14,7 @@ import { useShoes } from '../components/Shoes'
 import { btnGhost, field, FB, FC, FM, MUTED, pill, surface } from '../components/ui'
 import { formatDate, formatDistance, formatDuration, formatPace } from '../utils/formatters'
 import { activityTrackSource } from '../utils/activityTrack'
+import { cardiacDrift } from '../utils/cardiacDrift'
 
 // --- API shapes (app/api/activities.py) -------------------------------------
 type Summary = {
@@ -782,16 +783,19 @@ function TrackMap({ st, colorBy, cursor }: { st: Streams; colorBy: ColorBy; curs
 type Series = { mode: 'distance' | 'time'; x: number[]; pace: (number | null)[] }
 
 function Charts({ st, series, settings, onHover }: { st: Streams; series: Series; settings?: Settings; onHover: (v: number | null) => void }) {
+  const drift = useMemo(() => cardiacDrift(st), [st])
+  const hasDrift = has(drift)
   const options = useMemo(() => {
     const { x, mode } = series
     const xFmt = (v: number) => (mode === 'distance' ? `${v.toFixed(2)} km` : clock(v))
     const axisX = (v: number) => (mode === 'distance' ? `${+v.toFixed(1)}` : clock(v))
-    const mk = (name: string, y: (number | null)[], color: string, fmt: (v: number) => string, extra: { area?: boolean; inverse?: boolean; max?: (v: { max: number }) => number; bands?: [number, number, string][] } = {}): EChartsOption => ({
+    const mk = (name: string, y: (number | null)[], color: string, fmt: (v: number) => string, extra: { area?: boolean; inverse?: boolean; max?: (v: { max: number }) => number; bands?: [number, number, string][]; drift?: (number | null)[] } = {}): EChartsOption => ({
       animation: false,
       backgroundColor: 'transparent',
       textStyle: { color: C.text, fontFamily: 'ui-monospace, monospace' },
       title: { text: name, textStyle: { color: C.text, fontSize: 11, fontWeight: 'normal' }, left: 0, top: 0 },
-      grid: { left: 44, right: 8, top: 22, bottom: 22 },
+      grid: { left: 44, right: extra.drift ? 56 : 8, top: extra.drift ? 42 : 22, bottom: 22 },
+      legend: extra.drift ? { data: [name, 'Deriva'], top: 17, left: 0, textStyle: { color: C.text, fontSize: 10 }, itemWidth: 16, itemHeight: 7 } : undefined,
       tooltip: {
         trigger: 'axis',
         backgroundColor: '#121216',
@@ -799,12 +803,19 @@ function Charts({ st, series, settings, onHover }: { st: Streams; series: Series
         textStyle: { color: '#e5e5e5', fontFamily: 'ui-monospace, monospace', fontSize: 11 },
         axisPointer: { type: 'line', lineStyle: { color: '#737373' } },
         formatter: (ps) => {
-          const p = (Array.isArray(ps) ? ps[0] : ps) as unknown as { value: [number, number | null] }
-          return `${xFmt(p.value[0])}<br/>${name} ${p.value[1] == null ? '—' : fmt(p.value[1])}`
+          const points = (Array.isArray(ps) ? ps : [ps]) as unknown as { seriesName: string; value: [number, number | null] }[]
+          return `${xFmt(points[0].value[0])}<br/>${points.map((p) => {
+            const value = p.value[1]
+            const label = p.seriesName === 'Deriva' ? 'Deriva (passo corretto)' : name
+            return `${label} ${value == null ? '—' : p.seriesName === 'Deriva' ? `${value > 0 ? '+' : ''}${value.toFixed(1)}%` : fmt(value)}`
+          }).join('<br/>')}`
         },
       },
       xAxis: { type: 'value', min: 'dataMin', max: 'dataMax', axisLabel: { formatter: axisX }, splitLine: { show: false }, axisLine: { lineStyle: { color: C.grid } } },
-      yAxis: { type: 'value', scale: true, inverse: extra.inverse, min: extra.inverse ? (v: { min: number }) => Math.floor(v.min - 15) : undefined, max: extra.max, splitLine: { lineStyle: { color: C.grid } }, axisLabel: { formatter: (v: number) => fmt(v) } },
+      yAxis: [
+        { type: 'value', scale: true, inverse: extra.inverse, min: extra.inverse ? (v: { min: number }) => Math.floor(v.min - 15) : undefined, max: extra.max, splitLine: { lineStyle: { color: C.grid } }, axisLabel: { formatter: (v: number) => fmt(v) } },
+        ...(extra.drift ? [{ type: 'value' as const, position: 'right' as const, scale: true, min: (v: { min: number }) => Math.min(0, Math.floor(v.min)), max: (v: { max: number }) => Math.max(1, Math.ceil(v.max)), splitLine: { show: false }, axisLabel: { color: '#2dd4bf', formatter: (v: number) => `${v > 0 ? '+' : ''}${+v.toFixed(1)}%` } }] : []),
+      ],
       dataZoom: [{ type: 'inside', throttle: 16 }],
       series: [
         {
@@ -821,6 +832,17 @@ function Charts({ st, series, settings, onHover }: { st: Streams; series: Series
             data: extra.bands.map(([lo, hi, c]) => [{ yAxis: lo, itemStyle: { color: c, opacity: 0.15 } }, { yAxis: hi }]),
           },
         },
+        ...(extra.drift ? [{
+          type: 'line' as const,
+          name: 'Deriva',
+          yAxisIndex: 1,
+          data: x.map((v, i) => [v, extra.drift![i] ?? null]),
+          showSymbol: false,
+          sampling: 'lttb' as const,
+          lineStyle: { color: '#2dd4bf', width: 2, type: 'dashed' as const },
+          itemStyle: { color: '#2dd4bf' },
+          markLine: { silent: true, symbol: 'none', label: { show: false }, lineStyle: { color: '#2dd4bf', opacity: 0.4, type: 'dotted' as const }, data: [{ yAxis: 0 }] },
+        }] : []),
       ],
     })
 
@@ -833,13 +855,13 @@ function Charts({ st, series, settings, onHover }: { st: Streams; series: Series
       const hi = Math.max(settings?.hr_max ?? 0, ...hrs)
       const edges = z?.length === 4 ? [lo, ...z, hi] : null
       const bands = edges?.slice(0, 5).map((e, i): [number, number, string] => [e, edges[i + 1], ZONE_COLORS[i]]).filter(([a, b]) => b > a)
-      out.push(['hr', mk('HR', st.hr!, C.hr, (v) => `${Math.round(v)}`, { bands })])
+      out.push(['hr', mk('FC', st.hr!, C.hr, (v) => `${Math.round(v)}`, { bands, drift: hasDrift ? drift : undefined })])
     }
     if (has(st.altitude)) out.push(['elev', mk('Elevation', st.altitude!, C.elev, (v) => `${Math.round(v)} m`, { area: true })])
     if (has(st.cadence)) out.push(['cad', mk('Cadence', st.cadence!, C.cad, (v) => `${Math.round(v)}`)])
     if (has(st.power)) out.push(['pow', mk('Power', st.power!, C.pow, (v) => `${Math.round(v)} W`)])
     return out
-  }, [st, series, settings])
+  }, [st, series, settings, drift, hasDrift])
 
   useEffect(() => {
     echarts.connect(GROUP)
@@ -849,7 +871,14 @@ function Charts({ st, series, settings, onHover }: { st: Streams; series: Series
   return (
     <div className="grid gap-4 xl:grid-cols-2">
       {options.map(([k, o]) => (
-        <Chart key={k} option={o} onHover={onHover} />
+        <div key={k} className="min-w-0">
+          <Chart option={o} onHover={onHover} />
+          {k === 'hr' && <p className="mt-1 text-[11px] leading-relaxed text-neutral-500">
+            {hasDrift
+              ? 'Linea verde: deriva rispetto ai minuti 5–10, corretta per il passo e mediata su 5 minuti. Sopra 0% = calo di efficienza; sotto 0% = aumento. Nei progressivi e nelle ripetute risente dei cambi di intensità; non corregge pendenza e caldo.'
+              : 'Deriva non disponibile: servono FC e velocità valide per almeno 4 dei minuti 5–10. Pause e dati mancanti sono esclusi.'}
+          </p>}
+        </div>
       ))}
     </div>
   )
