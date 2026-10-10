@@ -13,6 +13,7 @@ import AiPanel from '../components/AiPanel'
 import { useShoes } from '../components/Shoes'
 import { btnGhost, field, FB, FC, FM, MUTED, pill, surface } from '../components/ui'
 import { formatDate, formatDistance, formatDuration, formatPace } from '../utils/formatters'
+import { activityTrackSource } from '../utils/activityTrack'
 
 // --- API shapes (app/api/activities.py) -------------------------------------
 type Summary = {
@@ -706,8 +707,8 @@ function TrackMap({ st, colorBy, cursor }: { st: Streams; colorBy: ColorBy; curs
     for (const p of data.pts) b.extend(p as [number, number])
     m.fitBounds(b, { padding: 24, duration: 0 })
     m.on('load', () => {
-      m.addSource('track', { type: 'geojson', data: data.track })
-      m.addLayer({ id: 'track', type: 'line', source: 'track', layout: { 'line-cap': 'round', 'line-join': 'round' }, paint: { 'line-width': 3, 'line-color': color(colorBy) } })
+      m.addSource('track', activityTrackSource(data.track))
+      m.addLayer({ id: 'track', type: 'line', source: 'track', layout: { 'line-cap': 'round', 'line-join': 'round' }, paint: { 'line-width': 4, 'line-color': color(colorBy) } })
       m.addSource('km', { type: 'geojson', data: data.km })
       m.addLayer({ id: 'km', type: 'circle', source: 'km', paint: { 'circle-radius': 8, 'circle-color': '#0a0a0c', 'circle-stroke-color': '#e5e5e5', 'circle-stroke-width': 1.5 } })
       m.addLayer({
