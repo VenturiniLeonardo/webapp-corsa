@@ -15,6 +15,7 @@ import { btnGhost, field, FB, FC, FM, MUTED, pill, surface } from '../components
 import { formatDate, formatDistance, formatDuration, formatPace } from '../utils/formatters'
 import { activityTrackSource } from '../utils/activityTrack'
 import { cardiacDrift } from '../utils/cardiacDrift'
+import { splitTrack } from '../utils/splitTrack'
 
 // --- API shapes (app/api/activities.py) -------------------------------------
 type Summary = {
@@ -166,6 +167,8 @@ export default function ActivityDetailPage() {
   const [xMode, setXMode] = useState<'distance' | 'time'>('distance')
   const [colorBy, setColorBy] = useState<ColorBy>('pace')
   const [hoverSplit, setHoverSplit] = useState<number | null>(null)
+  const [selection, setSelection] = useState<{ activityId: number; index: number } | null>(null)
+  const selectedSplit = selection?.activityId === id ? selection.index : null
   const cursor = useRef<((i: number | null) => void) | null>(null)
 
   const st = streams.data
@@ -183,6 +186,7 @@ export default function ActivityDetailPage() {
     for (const s of splits ?? []) ends.push((ends.at(-1) ?? 0) + (s.distance_m ?? 0))
     return ends
   }, [splits])
+  const selectedRange = useMemo<[number, number] | null>(() => selectedSplit == null ? null : [splitEnds[selectedSplit - 1] ?? 0, splitEnds[selectedSplit]], [selectedSplit, splitEnds])
 
   // ponytail: axis-pointer events fire once per connected chart; handler is O(log n) + a no-op setState
   const onHover = useCallback(
@@ -349,13 +353,14 @@ export default function ActivityDetailPage() {
             ))}
           </div>
           {has(st?.lat) && has(st?.lng) ? (
-            <TrackMap st={st!} colorBy={colorBy} cursor={cursor} />
+            <TrackMap st={st!} colorBy={colorBy} cursor={cursor} selectedRange={selectedRange} />
           ) : (
             <p className="flex h-60 items-center justify-center rounded-lg border border-dashed border-[#262b33] text-sm text-neutral-500">{streams.isPending ? 'Loading…' : 'No GPS track'}</p>
           )}
         </div>
         <div className={surface}>
-          <Splits splits={d.splits} hl={hoverSplit} />
+          {has(st?.distance) && has(st?.lat) && has(st?.lng) && <p className="text-xs text-neutral-400" aria-live="polite">{selectedSplit == null ? 'Clicca un km per evidenziarlo sulla mappa.' : `Km ${selectedSplit + 1} evidenziato · clicca di nuovo per deselezionarlo.`}</p>}
+          <Splits splits={d.splits} hl={selectedSplit ?? hoverSplit} selected={selectedSplit} onSelect={has(st?.distance) && has(st?.lat) && has(st?.lng) ? (index) => setSelection(selectedSplit === index ? null : { activityId: id, index }) : undefined} />
         </div>
       </section>
 
@@ -529,7 +534,7 @@ function Stat({ label, value, delta, est, model }: { label: string; value: strin
   )
 }
 
-function Splits({ splits, hl, bare }: { splits: Lap[]; hl: number | null; bare?: boolean }) {
+function Splits({ splits, hl, bare, selected, onSelect }: { splits: Lap[]; hl: number | null; bare?: boolean; selected?: number | null; onSelect?: (index: number) => void }) {
   const paces = splits.map(lapPace)
   const showGap = splits.some((s) => s.gap_speed_ms)
   const avg = median(paces)
@@ -558,9 +563,9 @@ function Splits({ splits, hl, bare }: { splits: Lap[]; hl: number | null; bare?:
             const dev = p != null && avg != null ? p - avg : 0
             const w = `${(Math.abs(dev) / maxDev) * 50}%`
             return (
-              <tr key={s.idx} ref={i === hl ? hlRef : undefined} className={`border-b border-[#262b33] ${i === hl ? 'bg-[#20252c] text-neutral-100' : ''}`}>
+              <tr key={s.idx} ref={i === hl ? hlRef : undefined} onClick={onSelect ? () => onSelect(i) : undefined} className={`border-b border-[#262b33] ${onSelect ? 'cursor-pointer hover:bg-[#20252c] focus-within:bg-[#20252c]' : ''} ${i === selected ? 'bg-amber-400/15 text-amber-200' : i === hl ? 'bg-[#20252c] text-neutral-100' : ''}`}>
                 <td className="py-1 pr-2 text-neutral-400">
-                  {i + 1}
+                  {onSelect ? <button type="button" aria-label={`Evidenzia km ${i + 1} sulla mappa`} aria-pressed={i === selected} className="rounded px-1 text-inherit focus-visible:outline-2 focus-visible:outline-amber-400">{i + 1}</button> : i + 1}
                   {s.distance_m != null && s.distance_m < 950 && <span className="text-xs text-neutral-500"> ({(s.distance_m / 1000).toFixed(2)})</span>}
                 </td>
                 <td className="pr-2 text-right">{formatPace(p).replace(' /km', '')}</td>
@@ -635,7 +640,7 @@ function Editor({ notes: n0, tags: t0, save }: { notes: string; tags: string[]; 
 }
 
 // --- map --------------------------------------------------------------------
-function TrackMap({ st, colorBy, cursor }: { st: Streams; colorBy: ColorBy; cursor: RefObject<((i: number | null) => void) | null> }) {
+function TrackMap({ st, colorBy, cursor, selectedRange }: { st: Streams; colorBy: ColorBy; cursor: RefObject<((i: number | null) => void) | null>; selectedRange: [number, number] | null }) {
   const el = useRef<HTMLDivElement>(null)
   const map = useRef<MlMap | null>(null)
 
@@ -731,6 +736,9 @@ function TrackMap({ st, colorBy, cursor }: { st: Streams; colorBy: ColorBy; curs
           'circle-stroke-width': 2,
         },
       })
+      m.addSource('selected-split', activityTrackSource({ type: 'FeatureCollection', features: [] }))
+      m.addLayer({ id: 'selected-split-outline', type: 'line', source: 'selected-split', layout: { 'line-cap': 'round', 'line-join': 'round' }, paint: { 'line-width': 10, 'line-color': '#0a0a0c' } }, 'km')
+      m.addLayer({ id: 'selected-split', type: 'line', source: 'selected-split', layout: { 'line-cap': 'round', 'line-join': 'round' }, paint: { 'line-width': 6, 'line-color': '#fbbf24' } }, 'km')
     })
     cursor.current = (i) => {
       const lat = i == null ? null : st.lat?.[i]
@@ -761,6 +769,23 @@ function TrackMap({ st, colorBy, cursor }: { st: Streams; colorBy: ColorBy; curs
     ;(map.current?.getSource('track') as GeoJSONSource | undefined)?.setData(data.track)
     ;(map.current?.getSource('km') as GeoJSONSource | undefined)?.setData(data.km)
   }, [data])
+
+  useEffect(() => {
+    const m = map.current
+    if (!m) return
+    const update = () => {
+      const section = splitTrack(st, selectedRange)
+      ;(m.getSource('selected-split') as GeoJSONSource | undefined)?.setData(section)
+      if (section.features.length) {
+        const bounds = new LngLatBounds()
+        for (const feature of section.features) for (const point of feature.geometry.coordinates) bounds.extend(point as [number, number])
+        m.fitBounds(bounds, { padding: 48, maxZoom: 16, duration: 500 })
+      }
+    }
+    if (m.getSource('selected-split')) update()
+    else m.once('load', update)
+    return () => { m.off('load', update) }
+  }, [st, selectedRange])
 
   const [lo, hi] = data.ranges[colorBy]
   const fmt = { pace: formatPace, hr: (v: number) => `${Math.round(v)} bpm`, power: (v: number) => `${Math.round(v)} W`, elev: (v: number) => `${Math.round(v)} m` }[colorBy]
