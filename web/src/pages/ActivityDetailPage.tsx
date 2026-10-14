@@ -5,7 +5,7 @@ import { type ExpressionSpecification, type GeoJSONSource, LngLatBounds, Map as 
 import type { Feature, FeatureCollection } from 'geojson'
 import 'maplibre-gl/dist/maplibre-gl.css'
 import mlWorkerUrl from 'maplibre-gl/dist/maplibre-gl-worker.mjs?worker&url'
-import { Fragment, type ReactNode, type RefObject, useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import { type ReactNode, type RefObject, useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { Link, useNavigate, useParams } from 'react-router-dom'
 import { api } from '../api/client'
 import ActivityReport from '../components/ActivityReport'
@@ -533,18 +533,6 @@ function Splits({ splits, laps = [], hl, bare, selected, onSelect }: { splits: L
   const showGap = splits.some((s) => s.gap_speed_ms)
   const avg = median(paces)
   const maxDev = Math.max(1, ...paces.map((p) => (p != null && avg != null ? Math.abs(p - avg) : 0)))
-  // device laps / workout steps: shown under the km in which they end (by cumulative distance)
-  const lapsAfter = new Map<number, { lap: Lap; n: number }[]>()
-  if (splits.length) {
-    let kmEnd = 0, lapEnd = 0
-    const ends = splits.map((x) => (kmEnd += x.distance_m ?? 0))
-    laps.forEach((lap, n) => {
-      lapEnd += lap.distance_m ?? 0
-      const i = Math.max(0, ends.findIndex((e) => e >= lapEnd - 1))
-      const k = ends.some((e) => e >= lapEnd - 1) ? i : splits.length - 1
-      lapsAfter.set(k, [...(lapsAfter.get(k) ?? []), { lap, n }])
-    })
-  }
   const hlRef = useRef<HTMLTableRowElement>(null)
   useEffect(() => {
     hlRef.current?.scrollIntoView({ block: 'nearest' })
@@ -569,8 +557,7 @@ function Splits({ splits, laps = [], hl, bare, selected, onSelect }: { splits: L
             const dev = p != null && avg != null ? p - avg : 0
             const w = `${(Math.abs(dev) / maxDev) * 50}%`
             return (
-              <Fragment key={s.idx}>
-              <tr ref={i === hl ? hlRef : undefined} onClick={onSelect ? () => onSelect(i) : undefined} className={`border-b border-[#262b33] ${onSelect ? 'cursor-pointer hover:bg-[#20252c] focus-within:bg-[#20252c]' : ''} ${i === selected ? 'bg-amber-400/15 text-amber-200' : i === hl ? 'bg-[#20252c] text-neutral-100' : ''}`}>
+              <tr key={s.idx} ref={i === hl ? hlRef : undefined} onClick={onSelect ? () => onSelect(i) : undefined} className={`border-b border-[#262b33] ${onSelect ? 'cursor-pointer hover:bg-[#20252c] focus-within:bg-[#20252c]' : ''} ${i === selected ? 'bg-amber-400/15 text-amber-200' : i === hl ? 'bg-[#20252c] text-neutral-100' : ''}`}>
                 <td className="py-1 pr-2 text-neutral-400">
                   {onSelect ? <button type="button" aria-label={`Evidenzia km ${i + 1} sulla mappa`} aria-pressed={i === selected} className="rounded px-1 text-inherit focus-visible:outline-2 focus-visible:outline-amber-400">{i + 1}</button> : i + 1}
                   {s.distance_m != null && s.distance_m < 950 && <span className="text-xs text-neutral-500"> ({(s.distance_m / 1000).toFixed(2)})</span>}
@@ -587,19 +574,25 @@ function Splits({ splits, laps = [], hl, bare, selected, onSelect }: { splits: L
                 <td className="pr-2 text-right">{s.avg_hr != null ? Math.round(s.avg_hr) : '—'}</td>
                 <td className="text-right">{s.elev_gain_m != null ? Math.round(s.elev_gain_m) : '—'}</td>
               </tr>
-              {lapsAfter.get(i)?.map(({ lap, n }) => (
-                <tr key={`lap${lap.idx}`} className="border-b border-[#262b33] bg-[#20252c]/60 text-xs text-neutral-300">
-                  <td className="py-1 pr-2 text-neutral-400" colSpan={showGap ? 3 : 2}>
-                    Lap {n + 1} · {clock(lap.elapsed_s ?? lap.moving_s ?? 0)}{lap.distance_m != null && ` · ${(lap.distance_m / 1000).toFixed(2)} km`} · {formatPace(lapPace(lap)).replace(' /km', '')}
-                  </td>
-                  <td className="pr-2" />
+            )
+          })}
+          {laps.length > 0 && (
+            <>
+              <tr className="border-b border-[#262b33] text-left text-xs text-neutral-400">
+                <th className="pb-1 pt-3 font-normal" colSpan={showGap ? 6 : 5}>Lap</th>
+              </tr>
+              {laps.map((lap, n) => (
+                <tr key={`lap${lap.idx}`} className="border-b border-[#262b33]">
+                  <td className="py-1 pr-2 text-neutral-400">{n + 1}<span className="text-xs text-neutral-500"> ({clock(lap.elapsed_s ?? lap.moving_s ?? 0)}{lap.distance_m != null && ` · ${(lap.distance_m / 1000).toFixed(2)} km`})</span></td>
+                  <td className="pr-2 text-right">{formatPace(lapPace(lap)).replace(' /km', '')}</td>
+                  {showGap && <td />}
+                  <td />
                   <td className="pr-2 text-right">{lap.avg_hr != null ? Math.round(lap.avg_hr) : '—'}</td>
                   <td className="text-right">{lap.elev_gain_m != null ? Math.round(lap.elev_gain_m) : '—'}</td>
                 </tr>
               ))}
-              </Fragment>
-            )
-          })}
+            </>
+          )}
         </tbody>
       </table>
     </div>
