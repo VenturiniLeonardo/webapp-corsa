@@ -361,7 +361,7 @@ export default function ActivityDetailPage() {
         </div>
         <div className={surface}>
           {has(st?.distance) && has(st?.lat) && has(st?.lng) && <p className="text-xs text-neutral-400" aria-live="polite">{selectedSplit == null ? 'Clicca un km per evidenziarlo sulla mappa.' : `Km ${selectedSplit + 1} evidenziato · clicca di nuovo per deselezionarlo.`}</p>}
-          <Splits splits={d.splits} laps={d.laps.length > 1 && d.laps.length !== d.splits.length ? d.laps : []} hl={selectedSplit ?? hoverSplit} selected={selectedSplit} onSelect={has(st?.distance) && has(st?.lat) && has(st?.lng) ? (index) => setSelection(selectedSplit === index ? null : { activityId: id, index }) : undefined} />
+          <Splits splits={d.splits} streams={st} laps={d.laps.length > 1 && d.laps.length !== d.splits.length ? d.laps : []} hl={selectedSplit ?? hoverSplit} selected={selectedSplit} onSelect={has(st?.distance) && has(st?.lat) && has(st?.lng) ? (index) => setSelection(selectedSplit === index ? null : { activityId: id, index }) : undefined} />
         </div>
       </section>
 
@@ -528,7 +528,7 @@ function Stat({ label, value, delta, est, model }: { label: string; value: strin
   )
 }
 
-function Splits({ splits, laps = [], hl, bare, selected, onSelect }: { splits: Lap[]; laps?: Lap[]; hl: number | null; bare?: boolean; selected?: number | null; onSelect?: (index: number) => void }) {
+function Splits({ splits, laps = [], streams, hl, bare, selected, onSelect }: { splits: Lap[]; laps?: Lap[]; streams?: Streams; hl: number | null; bare?: boolean; selected?: number | null; onSelect?: (index: number) => void }) {
   const paces = splits.map(lapPace)
   const showGap = splits.some((s) => s.gap_speed_ms)
   const avg = median(paces)
@@ -576,26 +576,66 @@ function Splits({ splits, laps = [], hl, bare, selected, onSelect }: { splits: L
               </tr>
             )
           })}
-          {laps.length > 0 && (
-            <>
-              <tr className="border-b border-[#262b33] text-left text-xs text-neutral-400">
-                <th className="pb-1 pt-3 font-normal" colSpan={showGap ? 6 : 5}>Lap</th>
-              </tr>
-              {laps.map((lap, n) => (
-                <tr key={`lap${lap.idx}`} className="border-b border-[#262b33]">
-                  <td className="py-1 pr-2 text-neutral-400">{n + 1}<span className="text-xs text-neutral-500"> ({clock(lap.elapsed_s ?? lap.moving_s ?? 0)}{lap.distance_m != null && ` · ${(lap.distance_m / 1000).toFixed(2)} km`})</span></td>
-                  <td className="pr-2 text-right">{formatPace(lapPace(lap)).replace(' /km', '')}</td>
-                  {showGap && <td />}
-                  <td />
-                  <td className="pr-2 text-right">{lap.avg_hr != null ? Math.round(lap.avg_hr) : '—'}</td>
-                  <td className="text-right">{lap.elev_gain_m != null ? Math.round(lap.elev_gain_m) : '—'}</td>
-                </tr>
-              ))}
-            </>
-          )}
         </tbody>
       </table>
+      {laps.length > 0 && <LapTable laps={laps} streams={streams} />}
     </div>
+  )
+}
+
+/** Per-lap stats; cadence / climb / max HR come from the stream window when the lap lacks them. */
+function LapTable({ laps, streams }: { laps: Lap[]; streams?: Streams }) {
+  const t = streams?.time
+  const win = (lap: Lap, ch?: (number | null)[]) => {
+    if (!t || !ch || lap.start_offset_s == null) return []
+    const a = lap.start_offset_s, b = a + (lap.elapsed_s ?? 0)
+    return ch.filter((v, i): v is number => v != null && t[i] != null && t[i]! >= a && t[i]! <= b)
+  }
+  const mean = (xs: number[]) => (xs.length ? xs.reduce((x, y) => x + y, 0) / xs.length : null)
+  const gain = (xs: number[]) => xs.reduce((g, v, i) => (i && v > xs[i - 1] ? g + v - xs[i - 1] : g), 0)
+  const rows = laps.map((l) => {
+    const alt = win(l, streams?.altitude)
+    return {
+      l,
+      pace: lapPace(l),
+      hrMax: l.max_hr ?? (win(l, streams?.hr).length ? Math.max(...win(l, streams?.hr)) : null),
+      cad: l.avg_cadence_spm ?? mean(win(l, streams?.cadence)),
+      up: l.elev_gain_m ?? (alt.length ? gain(alt) : null),
+      down: alt.length ? -gain(alt.map((v) => -v)) : null,
+    }
+  })
+  const bestPace = Math.min(...rows.map((r) => r.pace ?? Infinity))
+  return (
+    <table className="mt-4 w-full text-sm">
+      <thead className="border-b border-[#262b33] text-left text-xs text-neutral-400">
+        <tr>
+          <th className="py-1 pr-2 font-normal">Lap</th>
+          <th className="pr-2 text-right font-normal">Tempo</th>
+          <th className="pr-2 text-right font-normal">Dist</th>
+          <th className="pr-2 text-right font-normal">Passo</th>
+          <th className="pr-2 text-right font-normal">FC</th>
+          <th className="pr-2 text-right font-normal">FC max</th>
+          <th className="pr-2 text-right font-normal">Cad</th>
+          <th className="pr-2 text-right font-normal">D+</th>
+          <th className="text-right font-normal">D−</th>
+        </tr>
+      </thead>
+      <tbody className={mono}>
+        {rows.map((r, n) => (
+          <tr key={r.l.idx} className="border-b border-[#262b33]">
+            <td className="py-1 pr-2 text-neutral-400">{n + 1}</td>
+            <td className="pr-2 text-right">{clock(r.l.elapsed_s ?? r.l.moving_s ?? 0)}</td>
+            <td className="pr-2 text-right">{r.l.distance_m != null ? (r.l.distance_m / 1000).toFixed(2) : '—'}</td>
+            <td className={`pr-2 text-right ${r.pace === bestPace ? 'text-pace' : ''}`}>{formatPace(r.pace).replace(' /km', '')}</td>
+            <td className="pr-2 text-right">{r.l.avg_hr != null ? Math.round(r.l.avg_hr) : '—'}</td>
+            <td className="pr-2 text-right">{r.hrMax != null ? Math.round(r.hrMax) : '—'}</td>
+            <td className="pr-2 text-right">{r.cad != null ? Math.round(r.cad) : '—'}</td>
+            <td className="pr-2 text-right">{r.up != null ? Math.round(r.up) : '—'}</td>
+            <td className="text-right">{r.down != null ? Math.round(r.down) : '—'}</td>
+          </tr>
+        ))}
+      </tbody>
+    </table>
   )
 }
 
