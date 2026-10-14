@@ -5,7 +5,7 @@ import { type ExpressionSpecification, type GeoJSONSource, LngLatBounds, Map as 
 import type { Feature, FeatureCollection } from 'geojson'
 import 'maplibre-gl/dist/maplibre-gl.css'
 import mlWorkerUrl from 'maplibre-gl/dist/maplibre-gl-worker.mjs?worker&url'
-import { type ReactNode, type RefObject, useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import { Fragment, type ReactNode, type RefObject, useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { Link, useNavigate, useParams } from 'react-router-dom'
 import { api } from '../api/client'
 import ActivityReport from '../components/ActivityReport'
@@ -79,12 +79,13 @@ type Ch = 'time' | 'distance' | 'hr' | 'speed' | 'lat' | 'lng' | 'altitude' | 'c
 export type Streams = Partial<Record<Ch, (number | null)[]>>
 export type Settings = { hr_max: number | null; hr_zones: number[] | null; ref_pace_s_per_km?: number | null }
 type ColorBy = 'pace' | 'hr' | 'power' | 'elev'
-const COLOR_BY: [ColorBy, string, Ch][] = [['pace', 'Pace', 'speed'], ['hr', 'HR', 'hr'], ['power', 'Power', 'power'], ['elev', 'Elevation', 'altitude']]
+const COLOR_BY: [ColorBy, string, Ch][] = [['pace', 'Passo', 'speed'], ['hr', 'FC', 'hr'], ['power', 'Potenza', 'power'], ['elev', 'Quota', 'altitude']]
 
 // maplibre v6 resolves its worker next to its own module; Vite bundles that away, so point it explicitly
 setWorkerUrl(mlWorkerUrl)
 
 const WORKOUTS = ['easy', 'long', 'workout', 'race', 'other']
+const WORKOUT_LABEL: Record<string, string> = { easy: 'Facile', long: 'Lungo', workout: 'Qualità', race: 'Gara', other: 'Altro' }
 const PACE_CLAMP = 600 // 10:00/km (map colours)
 const CHART_PACE_MAX = 720 // 12:00/km: slow tail of the pace chart
 // map track ramps, dark → bright per metric (pace blue, HR red, power amber, elev gray)
@@ -204,8 +205,8 @@ export default function ActivityDetailPage() {
     [series, splitEnds],
   )
 
-  if (detail.isPending) return <p className="text-sm text-neutral-500">Loading…</p>
-  if (detail.isError) return <p className="text-sm text-red-400">Failed to load activity.</p>
+  if (detail.isPending) return <p className="text-sm text-neutral-500">Caricamento…</p>
+  if (detail.isError) return <p className="text-sm text-red-400">Impossibile caricare l'allenamento.</p>
   const d = detail.data
   const a = d.activity
   const tz = a.timezone ?? 'UTC'
@@ -233,18 +234,18 @@ export default function ActivityDetailPage() {
           <h1 className="mt-1 text-[44px] leading-none font-bold tracking-[.01em] text-[#eef1f4] uppercase" style={{ fontFamily: FC }}>{a.name ?? '—'}</h1>
         </div>
         <select
-          aria-label="Workout type"
+          aria-label="Tipo di allenamento"
           className={`${field} min-h-10 md:min-h-0`}
           value={a.workout_type ?? ''}
           onChange={(e) => patch.mutate({ workout_type: e.target.value || null })}
         >
           <option value="">—</option>
           {WORKOUTS.map((w) => (
-            <option key={w}>{w}</option>
+            <option key={w} value={w}>{WORKOUT_LABEL[w]}</option>
           ))}
         </select>
         <select
-          aria-label="Difficulty"
+          aria-label="Difficoltà"
           className={`${field} min-h-10 md:min-h-0 tabular-nums`}
           value={a.difficulty ?? ''}
           onChange={(e) => patch.mutate({ difficulty: e.target.value ? Number(e.target.value) : null })}
@@ -275,7 +276,7 @@ export default function ActivityDetailPage() {
         )}
         <label className="flex items-center gap-1 text-xs text-neutral-400">
           <input type="checkbox" checked={a.excluded_from_stats} onChange={(e) => patch.mutate({ excluded_from_stats: e.target.checked })} />
-          exclude from stats
+          Escludi dalle statistiche
         </label>
         {d.sources.map((s) => (
           <span key={s.id} className="rounded-full bg-[#20252c] px-2 text-xs text-neutral-300" title={s.source}>
@@ -284,10 +285,10 @@ export default function ActivityDetailPage() {
         ))}
         {strava && (
           <a href={`https://www.strava.com/activities/${strava.external_id}`} target="_blank" rel="noreferrer" className="text-sm text-[#4c8dff] hover:underline">
-            View on Strava
+            Apri su Strava
           </a>
         )}
-        {patch.isError && <span className="text-xs text-red-400">Save failed</span>}
+        {patch.isError && <span className="text-xs text-red-400">Salvataggio non riuscito</span>}
         <div className="ml-auto flex gap-2">
           <button
             className={`${btnGhost} gap-1.5`}
@@ -312,34 +313,34 @@ export default function ActivityDetailPage() {
 
       {/* 2. stats */}
       <section className={`${surface} grid grid-cols-2 gap-x-6 gap-y-4 lg:grid-cols-4`}>
-        <Group title="Time / distance">
-          <Stat label="Distance" value={a.distance_m != null ? formatDistance(a.distance_m) : '—'} delta={delta(a.distance_m, sim.map((s) => s.distance_m), (x) => `${(x / 1000).toFixed(2)} km`)} />
-          <Stat label="Moving" value={a.moving_s != null ? formatDuration(a.moving_s) : '—'} delta={delta(a.moving_s, sim.map((s) => s.moving_s), formatDuration)} />
-          <Stat label="Total" value={a.elapsed_s != null ? formatDuration(a.elapsed_s) : '—'} />
-          <Stat label="Pace" value={formatPace(pace)} delta={delta(pace, sim.map((s) => s.pace_s_per_km), (x) => `${Math.round(x)} s/km`)} />
-          <Stat label="GAP" value={formatPace(gap)} model="Grade-adjusted pace: each stretch weighted by the Minetti energy cost of its slope (flat equivalent)" />
-          <Stat label="Best 1 km" value={best1k != null ? formatPace(best1k) : '—'} />
+        <Group title="Tempo e distanza">
+          <Stat label="Distanza" value={a.distance_m != null ? formatDistance(a.distance_m) : '—'} delta={delta(a.distance_m, sim.map((s) => s.distance_m), (x) => `${(x / 1000).toFixed(2)} km`)} />
+          <Stat label="In movimento" value={a.moving_s != null ? formatDuration(a.moving_s) : '—'} delta={delta(a.moving_s, sim.map((s) => s.moving_s), formatDuration)} />
+          <Stat label="Totale" value={a.elapsed_s != null ? formatDuration(a.elapsed_s) : '—'} />
+          <Stat label="Passo" value={formatPace(pace)} delta={delta(pace, sim.map((s) => s.pace_s_per_km), (x) => `${Math.round(x)} s/km`)} />
+          <Stat label="GAP" value={formatPace(gap)} model="Passo corretto per la pendenza: ogni tratto è pesato in base al costo energetico della sua inclinazione (equivalente in piano)" />
+          <Stat label="Miglior km" value={best1k != null ? formatPace(best1k) : '—'} />
         </Group>
-        <Group title="Heart">
-          <Stat label="Avg HR" value={a.avg_hr != null ? `${Math.round(a.avg_hr)} bpm` : '—'} delta={delta(a.avg_hr, sim.map((s) => s.avg_hr), (x) => `${Math.round(x)}`)} />
-          <Stat label="Max HR" value={a.max_hr != null ? `${Math.round(a.max_hr)} bpm` : '—'} />
+        <Group title="Frequenza cardiaca">
+          <Stat label="FC media" value={a.avg_hr != null ? `${Math.round(a.avg_hr)} bpm` : '—'} delta={delta(a.avg_hr, sim.map((s) => s.avg_hr), (x) => `${Math.round(x)}`)} />
+          <Stat label="FC massima" value={a.max_hr != null ? `${Math.round(a.max_hr)} bpm` : '—'} />
           <Stat label="EF" value={ef != null ? ef.toFixed(2) : '—'} delta={delta(ef, sim.map((s) => s.efficiency_factor), (x) => x.toFixed(2))} />
-          <Stat label="EF corretto" value={m?.ef_adjusted != null ? m.ef_adjusted.toFixed(2) : '—'} model="EF on grade-adjusted speed, raised by the expected heat slowdown" />
-          <Stat label="Decoupling" value={m?.decoupling_pct != null ? `${m.decoupling_pct.toFixed(1)}%` : '—'} />
-          <Stat label={`HR @ ${clock(refPace)}`} value={m?.hr_at_ref_pace != null ? `${Math.round(m.hr_at_ref_pace)} bpm` : '—'} />
+          <Stat label="EF corretto" value={m?.ef_adjusted != null ? m.ef_adjusted.toFixed(2) : '—'} model="Efficienza corretta per pendenza e rallentamento atteso per il caldo" />
+          <Stat label="Deriva aerobica" value={m?.decoupling_pct != null ? `${m.decoupling_pct.toFixed(1)}%` : '—'} />
+          <Stat label={`FC a ${clock(refPace)}`} value={m?.hr_at_ref_pace != null ? `${Math.round(m.hr_at_ref_pace)} bpm` : '—'} />
         </Group>
-        <Group title="Terrain">
+        <Group title="Terreno">
           <Stat label="D+ / D−" value={`${a.elev_gain_m != null ? Math.round(a.elev_gain_m) : '—'} / ${a.elev_loss_m != null ? Math.round(a.elev_loss_m) : '—'} m`} />
-          <Stat label="Alt min / max" value={alt.length ? `${Math.round(Math.min(...alt))} / ${Math.round(Math.max(...alt))} m` : '—'} />
-          <Stat label="Temp / dew pt" value={a.weather_temp_c != null && a.weather_dew_point_c != null ? `${Math.round(a.weather_temp_c)} / ${Math.round(a.weather_dew_point_c)} °C` : '—'} est="Open-Meteo hourly at the run midpoint, not measured on the route" />
-          <Stat label="Heat cost" value={d.heat_slowdown_pct != null ? `+${d.heat_slowdown_pct.toFixed(1)}%` : '—'} model="Expected pace slowdown from temperature + dew point (Hadley table)" />
+          <Stat label="Quota min / max" value={alt.length ? `${Math.round(Math.min(...alt))} / ${Math.round(Math.max(...alt))} m` : '—'} />
+          <Stat label="Temp. / rugiada" value={a.weather_temp_c != null && a.weather_dew_point_c != null ? `${Math.round(a.weather_temp_c)} / ${Math.round(a.weather_dew_point_c)} °C` : '—'} est="Stima oraria Open-Meteo al punto medio della corsa, non misurata lungo il percorso" />
+          <Stat label="Costo del caldo" value={d.heat_slowdown_pct != null ? `+${d.heat_slowdown_pct.toFixed(1)}%` : '—'} model="Rallentamento atteso da temperatura e punto di rugiada (tabella Hadley)" />
         </Group>
-        <Group title="Other">
-          <Stat label="Cadence" value={a.avg_cadence_spm != null ? `${Math.round(a.avg_cadence_spm)} spm` : '—'} />
-          <Stat label="Power" value={a.avg_power_w != null ? `${Math.round(a.avg_power_w)} W` : '—'} est="Estimated by the provider, not measured by a power meter" />
-          <Stat label="Calories" value={a.calories_kcal != null ? `${a.calories_kcal} kcal` : '—'} est="Estimated from HR/pace and body data" />
+        <Group title="Altro">
+          <Stat label="Cadenza" value={a.avg_cadence_spm != null ? `${Math.round(a.avg_cadence_spm)} spm` : '—'} />
+          <Stat label="Potenza" value={a.avg_power_w != null ? `${Math.round(a.avg_power_w)} W` : '—'} est="Stimata dal fornitore, non misurata da un sensore di potenza" />
+          <Stat label="Calorie" value={a.calories_kcal != null ? `${a.calories_kcal} kcal` : '—'} est="Stimate da FC, passo e dati corporei" />
         </Group>
-        {sim.length > 0 && <p className="col-span-full text-xs text-neutral-500">Δ vs median of {sim.length} similar runs</p>}
+        {sim.length > 0 && <p className="col-span-full text-xs text-neutral-500">Δ rispetto alla mediana di {sim.length} corse simili</p>}
       </section>
 
       {/* 3. map | splits */}
@@ -355,12 +356,12 @@ export default function ActivityDetailPage() {
           {has(st?.lat) && has(st?.lng) ? (
             <TrackMap st={st!} colorBy={colorBy} cursor={cursor} selectedRange={selectedRange} />
           ) : (
-            <p className="flex h-60 items-center justify-center rounded-lg border border-dashed border-[#262b33] text-sm text-neutral-500">{streams.isPending ? 'Loading…' : 'No GPS track'}</p>
+            <p className="flex h-60 items-center justify-center rounded-lg border border-dashed border-[#262b33] text-sm text-neutral-500">{streams.isPending ? 'Caricamento…' : 'Traccia GPS non disponibile'}</p>
           )}
         </div>
         <div className={surface}>
           {has(st?.distance) && has(st?.lat) && has(st?.lng) && <p className="text-xs text-neutral-400" aria-live="polite">{selectedSplit == null ? 'Clicca un km per evidenziarlo sulla mappa.' : `Km ${selectedSplit + 1} evidenziato · clicca di nuovo per deselezionarlo.`}</p>}
-          <Splits splits={d.splits} hl={selectedSplit ?? hoverSplit} selected={selectedSplit} onSelect={has(st?.distance) && has(st?.lat) && has(st?.lng) ? (index) => setSelection(selectedSplit === index ? null : { activityId: id, index }) : undefined} />
+          <Splits splits={d.splits} laps={d.laps.length > 1 && d.laps.length !== d.splits.length ? d.laps : []} hl={selectedSplit ?? hoverSplit} selected={selectedSplit} onSelect={has(st?.distance) && has(st?.lat) && has(st?.lng) ? (index) => setSelection(selectedSplit === index ? null : { activityId: id, index }) : undefined} />
         </div>
       </section>
 
@@ -370,7 +371,7 @@ export default function ActivityDetailPage() {
           <div className="flex gap-1 text-xs">
             {(['distance', 'time'] as const).map((k) => (
               <button key={k} aria-pressed={series.mode === k} onClick={() => setXMode(k)} className={pill(series.mode === k)}>
-                {k === 'distance' ? 'Distance' : 'Time'}
+                {k === 'distance' ? 'Distanza' : 'Tempo'}
               </button>
             ))}
           </div>
@@ -387,7 +388,7 @@ export default function ActivityDetailPage() {
 
       {/* 6. best efforts */}
       {d.best_efforts.length > 0 && (
-        <Section title="Best efforts">
+        <Section title="Migliori prestazioni">
           <table className="w-full max-w-md text-sm">
             <tbody className={mono}>
               {d.best_efforts.map((b) => (
@@ -405,12 +406,12 @@ export default function ActivityDetailPage() {
 
       {/* 7. similar */}
       {sim.length > 0 && (
-        <Section title="Similar runs">
+        <Section title="Corse simili">
           <div className="overflow-x-auto">
             <table className="w-full text-sm">
               <thead className="border-b border-[#262b33] text-left text-xs text-neutral-400">
                 <tr>
-                  {['Date', 'Name', 'Dist', 'Pace', 'Δ', 'HR', 'Δ', 'EF', 'Δ'].map((h, i) => (
+                  {['Data', 'Nome', 'Dist.', 'Passo', 'Δ', 'FC', 'Δ', 'EF', 'Δ'].map((h, i) => (
                     <th key={i} className={`py-1 pr-3 font-normal ${i > 1 ? 'text-right' : ''}`}>{h}</th>
                   ))}
                 </tr>
@@ -434,14 +435,7 @@ export default function ActivityDetailPage() {
               </tbody>
             </table>
           </div>
-          <p className="text-xs text-neutral-500">Δ = this run minus that run</p>
-        </Section>
-      )}
-
-      {/* 8. device laps, only when they differ from the km splits */}
-      {d.laps.length > 0 && d.laps.length !== d.splits.length && (
-        <Section title="Device laps">
-          <Splits splits={d.laps} hl={null} bare />
+          <p className="text-xs text-neutral-500">Δ = questa corsa meno la corsa di confronto</p>
         </Section>
       )}
 
@@ -453,12 +447,12 @@ export default function ActivityDetailPage() {
 
       {/* 11. sources */}
       <details className={`${surface} text-sm`}>
-        <summary className="cursor-pointer text-neutral-400">Sources &amp; raw data</summary>
+        <summary className="cursor-pointer text-neutral-400">Origini e dati grezzi</summary>
         <div className="mt-2 space-y-3 overflow-x-auto">
           <table className="text-xs">
             <thead className="text-left text-neutral-500">
               <tr>
-                {['Source', 'External id', 'Status', 'Fetched', 'Mapper', ''].map((h) => (
+                {['Origine', 'ID esterno', 'Stato', 'Acquisito', 'Mapper', ''].map((h) => (
                   <th key={h} className="pr-3 font-normal">{h}</th>
                 ))}
               </tr>
@@ -471,7 +465,7 @@ export default function ActivityDetailPage() {
                   <td className="pr-3">{s.status}</td>
                   <td className="pr-3">{s.fetched_at ?? '—'}</td>
                   <td className="pr-3">v{s.mapper_version ?? '—'}</td>
-                  <td>{s.is_primary && 'primary'}</td>
+                  <td>{s.is_primary && 'principale'}</td>
                 </tr>
               ))}
             </tbody>
@@ -534,26 +528,38 @@ function Stat({ label, value, delta, est, model }: { label: string; value: strin
   )
 }
 
-function Splits({ splits, hl, bare, selected, onSelect }: { splits: Lap[]; hl: number | null; bare?: boolean; selected?: number | null; onSelect?: (index: number) => void }) {
+function Splits({ splits, laps = [], hl, bare, selected, onSelect }: { splits: Lap[]; laps?: Lap[]; hl: number | null; bare?: boolean; selected?: number | null; onSelect?: (index: number) => void }) {
   const paces = splits.map(lapPace)
   const showGap = splits.some((s) => s.gap_speed_ms)
   const avg = median(paces)
   const maxDev = Math.max(1, ...paces.map((p) => (p != null && avg != null ? Math.abs(p - avg) : 0)))
+  // device laps / workout steps: shown under the km in which they end (by cumulative distance)
+  const lapsAfter = new Map<number, { lap: Lap; n: number }[]>()
+  if (splits.length) {
+    let kmEnd = 0, lapEnd = 0
+    const ends = splits.map((x) => (kmEnd += x.distance_m ?? 0))
+    laps.forEach((lap, n) => {
+      lapEnd += lap.distance_m ?? 0
+      const i = Math.max(0, ends.findIndex((e) => e >= lapEnd - 1))
+      const k = ends.some((e) => e >= lapEnd - 1) ? i : splits.length - 1
+      lapsAfter.set(k, [...(lapsAfter.get(k) ?? []), { lap, n }])
+    })
+  }
   const hlRef = useRef<HTMLTableRowElement>(null)
   useEffect(() => {
     hlRef.current?.scrollIntoView({ block: 'nearest' })
   }, [hl])
-  if (!splits.length) return bare ? null : <p className="text-sm text-neutral-500">No splits.</p>
+  if (!splits.length) return bare ? null : <p className="text-sm text-neutral-500">Nessun intertempo.</p>
   return (
     <div className={bare ? '' : 'max-h-[440px] overflow-y-auto'}>
       <table className="w-full text-sm">
         <thead className="sticky top-0 border-b border-[#262b33] bg-[#191d23] text-left text-xs text-neutral-400">
           <tr>
-            <th className="py-1 pr-2 font-normal">{bare ? 'Lap' : 'Km'}</th>
-            <th className="pr-2 text-right font-normal">Pace</th>
-            {showGap && <th className="pr-2 text-right font-normal" title="Grade-adjusted pace (model)">GAP</th>}
+            <th className="py-1 pr-2 font-normal">{bare ? 'Giro' : 'Km'}</th>
+            <th className="pr-2 text-right font-normal">Passo</th>
+            {showGap && <th className="pr-2 text-right font-normal" title="Passo corretto per la pendenza (modello)">GAP</th>}
             <th className="w-1/3 font-normal" />
-            <th className="pr-2 text-right font-normal">HR</th>
+            <th className="pr-2 text-right font-normal">FC</th>
             <th className="text-right font-normal">D+</th>
           </tr>
         </thead>
@@ -563,7 +569,8 @@ function Splits({ splits, hl, bare, selected, onSelect }: { splits: Lap[]; hl: n
             const dev = p != null && avg != null ? p - avg : 0
             const w = `${(Math.abs(dev) / maxDev) * 50}%`
             return (
-              <tr key={s.idx} ref={i === hl ? hlRef : undefined} onClick={onSelect ? () => onSelect(i) : undefined} className={`border-b border-[#262b33] ${onSelect ? 'cursor-pointer hover:bg-[#20252c] focus-within:bg-[#20252c]' : ''} ${i === selected ? 'bg-amber-400/15 text-amber-200' : i === hl ? 'bg-[#20252c] text-neutral-100' : ''}`}>
+              <Fragment key={s.idx}>
+              <tr ref={i === hl ? hlRef : undefined} onClick={onSelect ? () => onSelect(i) : undefined} className={`border-b border-[#262b33] ${onSelect ? 'cursor-pointer hover:bg-[#20252c] focus-within:bg-[#20252c]' : ''} ${i === selected ? 'bg-amber-400/15 text-amber-200' : i === hl ? 'bg-[#20252c] text-neutral-100' : ''}`}>
                 <td className="py-1 pr-2 text-neutral-400">
                   {onSelect ? <button type="button" aria-label={`Evidenzia km ${i + 1} sulla mappa`} aria-pressed={i === selected} className="rounded px-1 text-inherit focus-visible:outline-2 focus-visible:outline-amber-400">{i + 1}</button> : i + 1}
                   {s.distance_m != null && s.distance_m < 950 && <span className="text-xs text-neutral-500"> ({(s.distance_m / 1000).toFixed(2)})</span>}
@@ -572,7 +579,7 @@ function Splits({ splits, hl, bare, selected, onSelect }: { splits: Lap[]; hl: n
                 {showGap && <td className="pr-2 text-right text-neutral-400">{s.gap_speed_ms ? formatPace(1000 / s.gap_speed_ms).replace(' /km', '') : '—'}</td>}
                 <td>
                   {/* bar from the centre (median); right = faster */}
-                  <div className="relative h-2" title={p != null && avg != null ? sign(dev, `${Math.round(Math.abs(dev))} s/km vs median`) : undefined}>
+                  <div className="relative h-2" title={p != null && avg != null ? sign(dev, `${Math.round(Math.abs(dev))} s/km rispetto alla mediana`) : undefined}>
                     <div className="absolute inset-y-0 left-1/2 w-px bg-border" />
                     <div className="absolute inset-y-0 bg-pace" style={dev <= 0 ? { left: '50%', width: w } : { right: '50%', width: w, opacity: 0.5 }} />
                   </div>
@@ -580,6 +587,17 @@ function Splits({ splits, hl, bare, selected, onSelect }: { splits: Lap[]; hl: n
                 <td className="pr-2 text-right">{s.avg_hr != null ? Math.round(s.avg_hr) : '—'}</td>
                 <td className="text-right">{s.elev_gain_m != null ? Math.round(s.elev_gain_m) : '—'}</td>
               </tr>
+              {lapsAfter.get(i)?.map(({ lap, n }) => (
+                <tr key={`lap${lap.idx}`} className="border-b border-[#262b33] bg-[#20252c]/60 text-xs text-neutral-300">
+                  <td className="py-1 pr-2 text-neutral-400" colSpan={showGap ? 3 : 2}>
+                    Lap {n + 1} · {clock(lap.elapsed_s ?? lap.moving_s ?? 0)}{lap.distance_m != null && ` · ${(lap.distance_m / 1000).toFixed(2)} km`} · {formatPace(lapPace(lap)).replace(' /km', '')}
+                  </td>
+                  <td className="pr-2" />
+                  <td className="pr-2 text-right">{lap.avg_hr != null ? Math.round(lap.avg_hr) : '—'}</td>
+                  <td className="text-right">{lap.elev_gain_m != null ? Math.round(lap.elev_gain_m) : '—'}</td>
+                </tr>
+              ))}
+              </Fragment>
             )
           })}
         </tbody>
@@ -592,7 +610,7 @@ function Zones({ secs }: { secs: number[] }) {
   const total = secs.reduce((a, b) => a + b, 0)
   if (!total) return null
   return (
-    <Section title="Time in HR zones">
+    <Section title="Tempo nelle zone FC">
       <div className="flex h-4 w-full overflow-hidden rounded-sm">
         {secs.map((s, i) => (
           <div key={i} style={{ width: `${(s / total) * 100}%`, background: ZONE_COLORS[i] }} title={`Z${i + 1}`} />
@@ -617,9 +635,9 @@ function Editor({ notes: n0, tags: t0, save }: { notes: string; tags: string[]; 
     if (parse(tags).join(',') !== t0.join(',')) save({ tags: parse(tags) })
   }
   return (
-    <Section title="Notes & tags">
+    <Section title="Note ed etichette">
       <textarea
-        aria-label="Notes"
+        aria-label="Note"
         rows={3}
         className={`${field} w-full`}
         value={notes}
@@ -627,8 +645,8 @@ function Editor({ notes: n0, tags: t0, save }: { notes: string; tags: string[]; 
         onBlur={() => notes !== n0 && save({ notes: notes || null })}
       />
       <input
-        aria-label="Tags"
-        placeholder="tags, comma separated"
+        aria-label="Etichette"
+        placeholder="etichette separate da virgola"
         className={`${field} w-full`}
         value={tags}
         onChange={(e) => setTags(e.target.value)}
@@ -872,7 +890,7 @@ function Charts({ st, series, settings, onHover }: { st: Streams; series: Series
     })
 
     const out: [string, EChartsOption][] = []
-    if (has(series.pace)) out.push(['pace', mk('Pace', series.pace, C.pace, (v) => formatPace(v).replace(' /km', ''), { inverse: true, max: (v) => Math.min(v.max, CHART_PACE_MAX) + 15 })])
+    if (has(series.pace)) out.push(['pace', mk('Passo', series.pace, C.pace, (v) => formatPace(v).replace(' /km', ''), { inverse: true, max: (v) => Math.min(v.max, CHART_PACE_MAX) + 15 })])
     if (has(st.hr)) {
       const z = settings?.hr_zones
       const hrs = st.hr!.filter((v): v is number => v != null)

@@ -3,6 +3,7 @@
 import json
 import sys
 import zipfile
+from dataclasses import asdict
 from datetime import UTC, datetime
 from itertools import pairwise
 from math import asin, cos, radians, sin, sqrt
@@ -13,7 +14,7 @@ from sqlalchemy import Engine
 from sqlalchemy.orm import Session
 
 from app.domain.models import utcnow_iso
-from app.ingest.strava_mapper import ActivityDraft, StreamDraft
+from app.ingest.strava_mapper import ActivityDraft, LapDraft, StreamDraft
 from app.worker.runner import Runner, _record
 
 SOURCE = "apple_health"
@@ -146,6 +147,59 @@ def map_hae_workout(w: dict[str, Any]) -> tuple[ActivityDraft, StreamDraft | Non
     return draft, stream
 
 
+def hae_laps(w: dict[str, Any]) -> list[LapDraft]:
+    """Workout steps (`activities[]`, e.g. 15' warm-up / 10' rep / 3' rest) -> device laps."""
+    acts = sorted(w.get("activities") or [], key=lambda a: a["start"])
+    if len(acts) < 2:  # a single step is just the whole run
+        return []
+    t0 = _t(w["start"])
+
+    def m(a: dict[str, Any], k: str) -> float | None:
+        v = (a.get("metrics") or {}).get(k)
+        return float(v["qty"]) if isinstance(v, dict) and v.get("qty") is not None else None
+
+    out = []
+    for i, a in enumerate(acts):
+        el = a.get("elapsedDuration") or a.get("duration")
+        out.append(
+            LapDraft(
+                kind="device_lap",
+                idx=i,
+                start_offset_s=round((_t(a["start"]) - t0).total_seconds()),
+                elapsed_s=round(el) if el is not None else None,
+                moving_s=round(el) if el is not None else None,
+                distance_m=m(a, "distance"),
+                avg_speed_ms=m(a, "speed"),
+                avg_hr=m(a, "heartRateAverage"),
+                max_hr=m(a, "heartRateMaximum"),
+                avg_cadence_spm=None,
+                elev_gain_m=None,
+            )
+        )
+    return out
+
+
+def backfill_laps(engine: Engine) -> int:
+    """One-off: add laps to already imported HAE workouts from their stored raw_detail."""
+    from sqlalchemy import delete, select
+
+    from app.domain.models import Activity, Lap, SourceRecord
+
+    n = 0
+    with Session(engine) as s, s.begin():
+        for rec in s.scalars(select(SourceRecord).where(SourceRecord.source == SOURCE)):
+            act = s.get(Activity, rec.activity_id) if rec.activity_id else None
+            if act is None or act.primary_source_id != rec.id or not rec.raw_detail:
+                continue
+            laps = hae_laps(rec.raw_detail)
+            if not laps:
+                continue
+            s.execute(delete(Lap).where(Lap.activity_id == act.id, Lap.kind == "device_lap"))
+            s.add_all(Lap(activity_id=act.id, **asdict(lp)) for lp in laps)
+            n += 1
+    return n
+
+
 def store_workout(engine: Engine, w: dict[str, Any]) -> str:
     """One atomic transaction per workout; idempotent on the HAE workout id. Returns status."""
     draft, stream = map_hae_workout(w)
@@ -157,7 +211,7 @@ def store_workout(engine: Engine, w: dict[str, Any]) -> str:
         if draft.status == "skipped":
             rec.status = "skipped"
         else:
-            Runner._save_activity(s, rec, draft, [], stream)
+            Runner._save_activity(s, rec, draft, hae_laps(w), stream)
         return rec.status
 
 
