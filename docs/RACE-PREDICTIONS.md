@@ -1,68 +1,67 @@
-# Previsioni gara nella pagina Record
+# Previsioni gara v2 nella pagina Record
 
-`GET /api/records/predictions` è in sola lettura e restituisce quattro stime
-(5.000, 10.000, 21.097,5 e 42.195 metri), con passo, tempo, fascia indicativa,
-qualità del riferimento e attività di origine. Non richiede migrazioni.
+Modello attivo: `riegel-hr-weather-v2`, parametri iniziali euristici, non calibrati.
+La specifica matematica completa è in [RACE-PREDICTIONS-V2.md](RACE-PREDICTIONS-V2.md).
+La v1 rimane in `app/metrics/predictions.py` per confronti e regressioni.
 
-## Modello v1
+## Comportamento implementato
 
-- Riegel: `t2 = t1 * (d2/d1)^k`, con `k = 1.06` come riferimento.
-- Prestazioni dell'ultimo anno: mediana ponderata delle proiezioni, peso con
-  emivita di 56 giorni e preferenza per distanze simili. Se esiste una gara
-  negli ultimi 180 giorni, si usano solo gare. In alternativa, una prova
-  ricavata dagli allenamenti è un riferimento conservativo, segnalato come tale.
-  Si considera al massimo un best effort per allenamento (il più lungo).
-- Preparazione: volume medio sulle 8 settimane intere (anche quelle senza
-  corse) e lungo massimo. Nelle estrapolazioni verso distanze maggiori,
-  `k` aumenta fino a 0,06 per preparazione mezza incompleta, e fino a ulteriori
-  0,12 per maratona. Sono coefficienti euristici, non una regressione validata.
-- FC: confronto fra corse regolari delle ultime 56 date locali, oggi incluso.
-  Efficienza = velocità GAP / FC, normalizzata per caldo. Si confrontano corse
-  distanti almeno 7 giorni, a FC entro 5 bpm e durata entro un fattore 2,
-  con copertura meteo e GAP omogenea. Servono 8 corse, 21 giorni di estensione
-  e 12 coppie; la pendenza mediana del logaritmo dell'efficienza aggiorna
-  il riferimento fino a oggi, con tetto ±8% su 56 giorni. Per gare anteriori
-  alla finestra non si estrapola la tendenza oltre 56 giorni.
-- Caldo: riusa `heat_slowdown_pct` (tabella empirica Hadley temperatura +
-  punto di rugiada). Prima rimuove il caldo dalla prestazione storica, poi
-  applica le condizioni attuali. Non è una misura individuale di acclimatazione;
-  vento, sole e percorso della gara non sono modellati.
-- Fasce: margini euristici crescenti con età del riferimento, assenza di FC o
-  meteo, estrapolazione e preparazione incompleta; non intervalli di confidenza.
-  La maratona riceve margini più ampi e una segnalazione specifica se volume
-  inferiore a 40 km/settimana o lungo massimo inferiore a 28 km.
+La previsione principale descrive la forma attuale in condizioni standard su
+percorso pianeggiante. Data o mese, ora locale e località attivano uno scenario
+aggiuntivo: forecast entro 10 giorni quando disponibile, altrimenti climatologia
+ERA5 del periodo sui 10 anni completi precedenti (almeno 5 anni utilizzabili).
+Ogni distanza usa il meteo all'ora di metà della durata standard prevista.
+Il meteo del momento non viene usato come previsione di una gara futura.
 
-Esclusi duplicati, attività escluse o cancellate a monte, indoor, trail,
-GPS sospetto e dati palesemente impossibili. Per produrre una stima servono
-almeno tre corse nelle ultime otto settimane e un riferimento nell'ultimo anno.
-Senza FC confrontabile si conserva la proiezione di base, segnalando il limite.
+Il modello combina gare e test qualificati, con normalizzazione del caldo e
+della pendenza, Riegel continuo, trend FC attenuato, detraining documentato,
+mediana ponderata e coerenza fra distanze. Il lato lento delle fasce è più ampio.
+Non attribuisce probabilità alle fasce e non presume miglioramenti futuri.
 
-## Meteo e privacy
+Il pannello «Dati e conferme per le previsioni» salva separatamente dalle attività
+sincronizzate: sensore, FC soglia/massima misurate, periodi di importazione
+completa, scarico dichiarato, distanza/tempo ufficiali, percorso piatto, test/RPE
+e preparazione precedente verificata. Senza queste conferme non deduce dati
+ufficiali o periodi di riposo. D+ da solo non viene usato come GAP.
 
-Rispetta `weather_enabled`. Open-Meteo riceve solo le coordinate di partenza
-dell'ultima corsa GPS recente, arrotondate a 0,01°, con lo stesso sistema del
-meteo storico. La UI specifica che si tratta di quella zona, non della posizione
-attuale del dispositivo o di una futura gara. Cache in memoria di 15 minuti,
-timeout di 4 secondi; errori memorizzati per un minuto. Meteo assente, scaduto
-o disabilitato non viene sostituito con quello dell'ultimo allenamento: si
-mostra esplicitamente una stima in condizioni fresche di riferimento.
+`weather_enabled` continua a controllare tutte le richieste di meteo gara.
+Le coordinate vengono arrotondate a 0,01 gradi. Ricerca esplicita Open-Meteo /
+GeoNames. Location e scenario sono ricordati nel browser. Cache di 15 minuti
+per forecast, 24 ore per archivio, un minuto per errori. Timeout HTTP 4 secondi.
 
-In alternativa è possibile cercare una località con
-`GET /api/records/predictions/locations?q=...` (Open-Meteo / GeoNames), scegliere
-un risultato distinguendo regione e paese, e passare `latitude`, `longitude`
-e `location_name` a `/api/records/predictions`. Le coordinate devono essere
-presenti insieme e nei limiti WGS84; vengono arrotondate a 0,01° per il meteo.
-La posizione personalizzata non richiede GPS nello storico e non modifica
-allenamenti o impostazioni. La scelta è salvata solo nel browser, con pulsante
-per ripristinare la zona dell'ultima corsa GPS. Il meteo disabilitato nelle
-impostazioni resta disabilitato anche per una località personalizzata.
+## API e audit
 
-## Riferimenti
+- `GET /api/records/predictions`: standard, riferimenti, correzioni, affidabilità.
+- Query facoltative: `latitude`, `longitude`, `location_name`, `race_date` oppure
+  `race_month`, `race_time`, `race_timezone` (IANA). Coordinate sempre in coppia.
+- `include_snapshot=true`: esporta input, parametri, campioni meteo, cutoff e hash
+  SHA-256. La UI consente di scaricarli. Snapshot generati su richiesta; non viene
+  conservato automaticamente un archivio di previsioni sul server.
+- `GET /api/records/predictions/locations?q=...`: ricerca città.
+- `GET /api/records/prediction-inputs`: profilo, conferme e attività disponibili.
+- `PUT /api/records/prediction-inputs/profile` e
+  `PUT /api/records/prediction-inputs/activities/{id}`: conferme esplicite.
 
-- Riegel, verifica in amatori: https://pmc.ncbi.nlm.nih.gov/articles/PMC5000509/
-- FC e storico: https://pubmed.ncbi.nlm.nih.gov/30440994/
-- Effetti meteo: https://pubmed.ncbi.nlm.nih.gov/34652333/
-- Dati meteo: https://open-meteo.com/en/docs
+I metadati sono JSON nella tabella settings: nessuna migrazione DB richiesta.
+Attivazione v2 diretta su richiesta dell'utente; non è stato eseguito uno studio
+prospettico né sono stati calibrati i coefficienti sullo storico personale.
 
-Il modello combinato v1 è una stima esplicabile: richiede validazione prospettica
-su nuove gare prima di rivendicare accuratezza individuale.
+## Verifica e backtest
+
+I test coprono i cinque esempi numerici della specifica, mediana, continuità,
+coerenza, sensori/meteo, copertura, selezione test, persistenza e API. I test browser
+coprono quattro card, mobile, gestione errori, location e conferme.
+
+`python -m scripts.backtest_predictions_v2 dataset.json` ricalcola snapshot
+esportati senza rete. Ogni record contiene `athlete_id`, `event_date`,
+`distance_m`, `actual_elapsed_s`, `standard_eligible`, `product` (`standard` o
+`scenario`) e `snapshot` (l'oggetto input_snapshot esportato). La verità standard
+richiede verifica indipendente di percorso piano e condizioni temperate.
+Lo scenario deve usare il forecast/clima catturato prima della gara.
+Il comando rifiuta snapshot alla data della gara o successivi e attività future;
+separa gli atleti deterministicamente in development/holdout 80/20, riporta MAPE,
+bias, copertura empirica, ampiezza e astensioni per distanza e prodotto.
+Non esegue fitting né certifica intervalli calibrati. Per una validazione reale
+servono snapshot storici catturati prima degli eventi e un dataset adeguato,
+seguendo il protocollo della specifica. I dati DB correnti non ricostruiscono
+la disponibilità storica di importazioni, modifiche o vecchi forecast.

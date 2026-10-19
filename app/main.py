@@ -11,6 +11,7 @@ from app.api.activities import router as activities_router
 from app.api.ai import router as ai_router
 from app.api.imports import router as imports_router
 from app.api.plans import router as plans_router
+from app.api.prediction_inputs import router as prediction_inputs_router
 from app.api.predictions import router as predictions_router
 from app.api.report import router as report_router
 from app.api.routes import router as routes_router
@@ -76,6 +77,7 @@ async def security_headers(request: Request, call_next: Next) -> Response:
 app.include_router(activities_router)
 app.include_router(stats_router)
 app.include_router(predictions_router)
+app.include_router(prediction_inputs_router)
 app.include_router(sync_router)
 app.include_router(settings_router)
 app.include_router(ai_router)
