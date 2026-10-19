@@ -170,7 +170,7 @@ def load_data(
         run = RunV2(
             a.id,
             date.fromisoformat(a.local_date),
-            d,
+            float(info.official_distance_m) if official and info.official_distance_m else d,
             elapsed,
             moving,
             analysed.get("hr", a.avg_hr),
@@ -182,7 +182,8 @@ def load_data(
             a.weather_dew_point_c,
             a.workout_type == "race",
             sensor,
-            info.sensor_id or profile.sensor_id,
+            info.sensor_id
+            or (profile.sensor_id if not info.sensor or info.sensor == profile.sensor else None),
             analysed.get("duration_s"),
             bool(analysed.get("hr")),
             analysed.get("speed"),

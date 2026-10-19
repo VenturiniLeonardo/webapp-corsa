@@ -209,8 +209,8 @@ def trend(runs: list[RunV2], p: Parameters = P) -> dict[str, Any]:
         for b in usable[i + 1 :]:
             delta = (b.day - a.day).days
             da, db = a.hr_duration_s or a.moving_s, b.hr_duration_s or b.moving_s
-            same_sensor = (
-                a.sensor_id == b.sensor_id if a.sensor_id and b.sensor_id else a.sensor == b.sensor
+            same_sensor = a.sensor == b.sensor and (
+                a.sensor_id == b.sensor_id if a.sensor_id and b.sensor_id else True
             )
             if abs(delta) < p.hr_pair_days or not same_sensor or not 0.5 <= db / da <= 2:
                 continue

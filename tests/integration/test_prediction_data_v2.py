@@ -73,6 +73,7 @@ def test_official_distance_survives_bad_gps_without_reusing_gap(engine):  # noqa
             NOW,
         )
         assert refs[0].distance_m == 21097.5 and refs[0].official
+        assert runs[0].distance_m == 21097.5
         assert refs[0].grade_factor is None and runs[0].gap_speed_ms is None
 
 
