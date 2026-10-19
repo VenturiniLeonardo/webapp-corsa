@@ -47,6 +47,16 @@ timeout di 4 secondi; errori memorizzati per un minuto. Meteo assente, scaduto
 o disabilitato non viene sostituito con quello dell'ultimo allenamento: si
 mostra esplicitamente una stima in condizioni fresche di riferimento.
 
+In alternativa è possibile cercare una località con
+`GET /api/records/predictions/locations?q=...` (Open-Meteo / GeoNames), scegliere
+un risultato distinguendo regione e paese, e passare `latitude`, `longitude`
+e `location_name` a `/api/records/predictions`. Le coordinate devono essere
+presenti insieme e nei limiti WGS84; vengono arrotondate a 0,01° per il meteo.
+La posizione personalizzata non richiede GPS nello storico e non modifica
+allenamenti o impostazioni. La scelta è salvata solo nel browser, con pulsante
+per ripristinare la zona dell'ultima corsa GPS. Il meteo disabilitato nelle
+impostazioni resta disabilitato anche per una località personalizzata.
+
 ## Riferimenti
 
 - Riegel, verifica in amatori: https://pmc.ncbi.nlm.nih.gov/articles/PMC5000509/

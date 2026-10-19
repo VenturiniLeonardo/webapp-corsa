@@ -47,3 +47,35 @@ test('record: current weather, missing data and retry are explicit', async ({ pa
   await expect(page.getByText('Tempo non stimabile')).toHaveCount(4)
   await expect(page.getByRole('alert')).toHaveCount(0)
 })
+
+test('record: select a city, remember it on reload and restore automatic location', async ({ page }) => {
+  await page.setViewportSize({ width: 390, height: 844 })
+  await page.route('**/api/records/predictions/locations?*', route => route.fulfill({ json: [
+    { id: 1, label: 'Roma, Lazio, Italia', latitude: 41.9, longitude: 12.5 },
+    { id: 2, label: 'Roma, Australia', latitude: -26.6, longitude: 148.8 },
+  ] }))
+  await page.route('**/api/records/predictions?*', async route => {
+    const url = new URL(route.request().url())
+    expect(url.searchParams.get('latitude')).toBe('41.9')
+    expect(url.searchParams.get('longitude')).toBe('12.5')
+    const response = await route.fetch()
+    const data = await response.json()
+    data.weather = { status: 'current', location_mode: 'custom', location_name: 'Roma, Lazio, Italia', temp_c: 30, dew_point_c: 22, observed_at: null }
+    await route.fulfill({ json: data })
+  })
+  await page.goto('/records')
+  await page.getByLabel('Città o località per il calcolo').fill('Roma')
+  await page.getByRole('button', { name: 'Cerca località' }).click()
+  await expect(page.getByRole('button', { name: 'Roma, Australia', exact: true })).toBeVisible()
+  await page.getByRole('button', { name: 'Roma, Lazio, Italia', exact: true }).click()
+  await expect(page.getByText(/30.0 °C/)).toBeVisible()
+  await expect(page.getByText('Meteo attuale · Roma, Lazio, Italia')).toBeVisible()
+  expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(true)
+  await page.reload()
+  await expect(page.getByText(/30.0 °C/)).toBeVisible()
+  await page.getByRole('button', { name: 'Usa ultima corsa GPS' }).click()
+  await expect(page.getByText('Automatica · ultima corsa GPS')).toBeVisible()
+  await expect(page.getByText('Meteo attuale · zona dell’ultima corsa GPS')).toBeVisible()
+  await expect(page.getByRole('button', { name: 'Usa ultima corsa GPS' })).toHaveCount(0)
+  expect(await page.evaluate(() => localStorage.getItem('corsa.predictionLocation'))).toBeNull()
+})

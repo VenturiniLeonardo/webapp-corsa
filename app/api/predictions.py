@@ -4,12 +4,12 @@ import math
 import threading
 import time
 from datetime import UTC, date, datetime, timedelta
-from typing import Any, Literal
+from typing import Annotated, Any, Literal
 from zoneinfo import ZoneInfo
 
 import httpx
-from fastapi import APIRouter
-from pydantic import BaseModel
+from fastapi import APIRouter, HTTPException, Query
+from pydantic import BaseModel, Field
 from sqlalchemy import select
 
 from app.api.activities import Db
@@ -20,6 +20,14 @@ from app.metrics.predictions import Anchor, Run, predict
 router = APIRouter(prefix="/api")
 _cache: dict[tuple[float, float], tuple[float, dict[str, Any] | None]] = {}
 _lock = threading.Lock()
+GEOCODING_URL = "https://geocoding-api.open-meteo.com/v1/search"
+
+
+class Location(BaseModel):
+    id: int
+    label: str
+    latitude: float = Field(ge=-90, le=90, allow_inf_nan=False)
+    longitude: float = Field(ge=-180, le=180, allow_inf_nan=False)
 
 
 class Weather(BaseModel):
@@ -28,6 +36,8 @@ class Weather(BaseModel):
     dew_point_c: float | None = None
     observed_at: str | None = None
     location_activity_id: int | None = None
+    location_mode: Literal["auto", "custom"] = "auto"
+    location_name: str | None = None
     source: str = "Open-Meteo"
 
 
@@ -118,10 +128,27 @@ def fetch_current(lat: float, lng: float) -> dict[str, Any] | None:
     return result
 
 
-def _weather(db: Db, activities: list[Activity], today: date) -> Weather:
+def _weather(
+    db: Db,
+    activities: list[Activity],
+    today: date,
+    latitude: float | None = None,
+    longitude: float | None = None,
+    location_name: str | None = None,
+) -> Weather:
+    custom = latitude is not None and longitude is not None
+    mode: Literal["auto", "custom"] = "custom" if custom else "auto"
     enabled = db.get(Setting, "weather_enabled")
     if not enabled or not enabled.value:
-        return Weather(status="disabled")
+        return Weather(status="disabled", location_mode=mode, location_name=location_name)
+    if latitude is not None and longitude is not None:
+        data = fetch_current(round(latitude, 2), round(longitude, 2))
+        return Weather(
+            status="current" if data else "unavailable",
+            location_mode="custom",
+            location_name=location_name or f"{latitude:.2f}, {longitude:.2f}",
+            **(data or {}),
+        )
     for act in reversed(activities):
         if act.local_date < (today - timedelta(days=55)).isoformat() or not act.has_gps:
             continue
@@ -139,8 +166,51 @@ def _weather(db: Db, activities: list[Activity], today: date) -> Weather:
     return Weather(status="no_location")
 
 
+@router.get("/records/predictions/locations", response_model=list[Location])
+def search_locations(q: Annotated[str, Query(min_length=2, max_length=100)]) -> list[Location]:
+    """Explicit city search: names go to Open-Meteo, never activity coordinates."""
+    if len(q.strip()) < 2:
+        raise HTTPException(422, "Inserisci almeno due caratteri.")
+    try:
+        with httpx.Client(timeout=4) as client:
+            response = client.get(
+                GEOCODING_URL,
+                params={"name": q.strip(), "count": 8, "language": "it", "format": "json"},
+            )
+            response.raise_for_status()
+            rows = response.json().get("results", [])
+        results = []
+        for row in rows:
+            try:
+                parts = list(
+                    dict.fromkeys(str(row[k]) for k in ("name", "admin1", "country") if row.get(k))
+                )
+                if not row.get("name"):
+                    continue
+                results.append(
+                    Location(
+                        id=row["id"],
+                        label=", ".join(parts)[:160],
+                        latitude=row["latitude"],
+                        longitude=row["longitude"],
+                    )
+                )
+            except (ValueError, TypeError, KeyError):
+                continue
+        return results
+    except (httpx.HTTPError, ValueError, TypeError, AttributeError):
+        raise HTTPException(502, "Ricerca località temporaneamente non disponibile.") from None
+
+
 @router.get("/records/predictions", response_model=Predictions)
-def race_predictions(db: Db) -> Predictions:
+def race_predictions(
+    db: Db,
+    latitude: Annotated[float | None, Query(ge=-90, le=90, allow_inf_nan=False)] = None,
+    longitude: Annotated[float | None, Query(ge=-180, le=180, allow_inf_nan=False)] = None,
+    location_name: Annotated[str | None, Query(max_length=160)] = None,
+) -> Predictions:
+    if (latitude is None) != (longitude is None):
+        raise HTTPException(422, "Latitudine e longitudine devono essere specificate insieme.")
     now = _now()
     # local_date is in the runner's timezone, not the UTC calendar day.
     today = now.astimezone(ZoneInfo("Europe/Rome")).date()
@@ -211,7 +281,7 @@ def race_predictions(db: Db) -> Predictions:
     anchors.extend(
         Anchor(by_id[e.activity_id], e.distance_m, e.elapsed_s, False) for e in efforts.values()
     )
-    weather = _weather(db, activities, today)
+    weather = _weather(db, activities, today, latitude, longitude, location_name)
     result = predict(runs, anchors, today, weather.temp_c, weather.dew_point_c)
     return Predictions(
         generated_at=now.isoformat(),

@@ -117,3 +117,100 @@ def test_current_weather_changes_prediction_and_reports_location(engine, client,
     assert hot["weather"]["location_activity_id"] == aid
     assert hot["heat_adjustment_pct"] > 0
     assert hot["items"][1]["elapsed_s"] > cool["items"][1]["elapsed_s"]
+
+
+@respx.mock
+def test_custom_location_uses_selected_coordinates_without_gps(engine, client):  # noqa: F811
+    populate(engine)
+    with Session(engine) as s, s.begin():
+        s.add(Setting(key="weather_enabled", value=True))
+    route = respx.get(predictions.FORECAST_URL).respond(
+        200,
+        json={
+            "hourly": {
+                "time": [NOW.timestamp()],
+                "temperature_2m": [30],
+                "dew_point_2m": [22],
+            }
+        },
+    )
+    before = client.get("/api/records/predictions").json()
+    result = client.get(
+        "/api/records/predictions",
+        params={
+            "latitude": 41.9028,
+            "longitude": 12.4964,
+            "location_name": "Roma, Lazio, Italia",
+        },
+    )
+    assert result.status_code == 200
+    data = result.json()
+    assert data["weather"]["location_name"] == "Roma, Lazio, Italia"
+    assert data["weather"]["location_mode"] == "custom"
+    assert data["weather"]["location_activity_id"] is None
+    assert data["weather"]["status"] == "current"
+    assert dict(route.calls[0].request.url.params)["latitude"] == "41.9"
+    assert dict(route.calls[0].request.url.params)["longitude"] == "12.5"
+    assert data["runs_8w"] == before["runs_8w"]
+    assert data["items"][1]["elapsed_s"] > before["items"][1]["elapsed_s"]
+
+
+@respx.mock
+def test_custom_location_respects_disabled_weather(client):  # noqa: F811
+    route = respx.get(predictions.FORECAST_URL).respond(500)
+    result = client.get("/api/records/predictions", params={"latitude": 45, "longitude": 7})
+    assert result.status_code == 200
+    assert result.json()["weather"]["status"] == "disabled"
+    assert result.json()["weather"]["location_mode"] == "custom"
+    assert route.call_count == 0
+
+
+@pytest.mark.parametrize(
+    "params",
+    [
+        {"latitude": 45},
+        {"longitude": 7},
+        {"latitude": 91, "longitude": 7},
+        {"latitude": 45, "longitude": -181},
+        {"latitude": "nan", "longitude": 7},
+        {"latitude": 45, "longitude": 7, "location_name": "x" * 161},
+    ],
+)
+def test_invalid_location_is_rejected(client, params):  # noqa: F811
+    assert client.get("/api/records/predictions", params=params).status_code == 422
+
+
+@respx.mock
+def test_location_search_disambiguates_results_and_handles_outage(client):  # noqa: F811
+    route = respx.get(predictions.GEOCODING_URL).respond(
+        200,
+        json={
+            "results": [
+                {
+                    "id": 1,
+                    "name": "Roma",
+                    "admin1": "Lazio",
+                    "country": "Italia",
+                    "latitude": 41.9,
+                    "longitude": 12.5,
+                },
+                {
+                    "id": 2,
+                    "name": "Roma",
+                    "country": "Australia",
+                    "latitude": -26.6,
+                    "longitude": 148.8,
+                },
+                {"id": 3, "name": "Broken", "latitude": 1000, "longitude": 0},
+            ]
+        },
+    )
+    response = client.get("/api/records/predictions/locations", params={"q": "Roma"})
+    assert response.status_code == 200
+    assert [p["label"] for p in response.json()] == ["Roma, Lazio, Italia", "Roma, Australia"]
+    assert route.calls[0].request.url.params["language"] == "it"
+    route.respond(200, json={})
+    assert client.get("/api/records/predictions/locations?q=Unknown").json() == []
+    route.respond(503)
+    assert client.get("/api/records/predictions/locations?q=Roma").status_code == 502
+    assert client.get("/api/records/predictions/locations?q=x").status_code == 422
