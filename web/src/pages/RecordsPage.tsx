@@ -1,6 +1,7 @@
 import { useQuery } from '@tanstack/react-query'
 import { Link } from 'react-router-dom'
 import { api } from '../api/client'
+import RacePredictions from '../components/RacePredictions'
 import { BLUE, FC, FM, FB, MUTED, PageHead, SOFT, surface } from '../components/ui'
 import { formatDuration, formatPace } from '../utils/formatters'
 
@@ -61,6 +62,7 @@ export default function RecordsPage() {
           </section>
         ))}
       </div>
+      <RacePredictions />
     </div>
   )
 }
