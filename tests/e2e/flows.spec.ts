@@ -48,8 +48,8 @@ test('3. edit notes and workout type, persisted after reload', async ({ page }) 
   await page.locator('tbody tr').first().click()
   await expect(page).toHaveURL(/\/activities\/\d+$/)
 
-  const type = page.getByLabel('Workout type')
-  const notes = page.getByLabel('Notes')
+  const type = page.getByLabel('Tipo di allenamento')
+  const notes = page.getByLabel('Note')
   await expect(type).toBeVisible()
   const newType = (await type.inputValue()) === 'race' ? 'easy' : 'race'
   const text = `e2e note ${Date.now()}`
@@ -64,6 +64,6 @@ test('3. edit notes and workout type, persisted after reload', async ({ page }) 
   await done
 
   await page.reload()
-  await expect(page.getByLabel('Workout type')).toHaveValue(newType)
-  await expect(page.getByLabel('Notes')).toHaveValue(text)
+  await expect(page.getByLabel('Tipo di allenamento')).toHaveValue(newType)
+  await expect(page.getByLabel('Note')).toHaveValue(text)
 })
