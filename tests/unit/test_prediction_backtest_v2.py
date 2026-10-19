@@ -4,8 +4,8 @@ from datetime import date, timedelta
 
 import pytest
 
+from app.metrics.prediction_backtest import evaluate, replay
 from app.metrics.predictions_v2 import VERSION, P, Reference, RunV2
-from scripts.backtest_predictions_v2 import evaluate, replay
 
 
 def dataset():
