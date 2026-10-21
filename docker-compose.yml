@@ -28,7 +28,10 @@ services:
   # Oracle Always Free idle-reclaim guard: holds ~3.5 GB resident so VM memory stays >20% (A1 shapes).
   # ponytail: memory-only, no CPU/network burn; remove if the account is PAYG-exempt.
   keepalive:
-    image: python:3-alpine
+    image: corsa-keepalive:latest
+    build:
+      context: .
+      dockerfile: Dockerfile.keepalive
     command: python -c "b = b'x' * (3500 * 2**20); import time; time.sleep(10**9)"
     deploy:
       resources:
