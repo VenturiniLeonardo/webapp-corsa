@@ -1,4 +1,4 @@
-FROM node:22-alpine AS web
+FROM node:24-alpine AS web
 WORKDIR /web
 COPY web/package.json web/package-lock.json web/.npmrc ./
 RUN npm ci
@@ -10,7 +10,8 @@ ENV PYTHONUNBUFFERED=1 PIP_NO_CACHE_DIR=1
 WORKDIR /srv
 COPY pyproject.toml ./
 COPY app/ app/
-RUN pip install .
+RUN apt-get update && apt-get upgrade -y && rm -rf /var/lib/apt/lists/* \
+    && python -m pip install --upgrade pip && pip install .
 COPY alembic.ini ./
 COPY alembic/ alembic/
 COPY --from=web /web/dist app/static
