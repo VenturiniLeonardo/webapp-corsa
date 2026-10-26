@@ -14,7 +14,16 @@ from app.api import stats
 from app.api.stats import theil_sen
 from app.core.config import get_settings
 from app.core.db import get_session, make_engine
-from app.domain.models import Activity, ActivityMetrics, Base, BestEffort, Setting
+from app.domain.models import (
+    Activity,
+    ActivityMetrics,
+    Base,
+    BestEffort,
+    Setting,
+    SourceRecord,
+    Stream,
+)
+from app.domain.stream_codec import encode_stream
 from app.main import app
 
 TODAY = date(2026, 9, 30)  # a Wednesday
@@ -454,6 +463,107 @@ def test_fitness_endpoint(engine, client):
 def test_fitness_empty(client):
     f = get(client, "/api/stats/fitness")
     assert f["vo2max"]["vdot"] is None and f["ctl"] is None and f["predictions"] == []
+
+
+def hr_settings(s):
+    s.add_all([Setting(key="hr_max", value=190), Setting(key="hr_rest", value=60)])
+
+
+def attach_long_stream(s, a, hr=155):
+    record = SourceRecord(source="file_fit", external_id=str(a.id), activity_id=a.id)
+    s.add(record)
+    s.flush()
+    ts = list(range(0, 8101, 5))
+    ch = {
+        "time": ts,
+        "distance": [2.3 * min(t, 3900) + 2.75 * max(0, t - 3900) for t in ts],
+        "hr": [hr] * len(ts),
+    }
+    s.add(
+        Stream(
+            source_record_id=record.id,
+            activity_id=a.id,
+            n_points=len(ts),
+            channels="time,distance,hr",
+            data=encode_stream(ch),
+            codec_version=1,
+        )
+    )
+    a.stream_source_id = record.id
+
+
+def test_fitness_includes_long_without_a_pr_or_whole_run_steady_flag(engine, client):
+    with Session(engine) as s, s.begin():
+        hr_settings(s)
+        for day in ("2026-09-18", "2026-09-22", "2026-09-25"):
+            a = add(s, f"{day}T06:00:00+00:00", dist=9000, mov=3000)
+            metrics(s, a, is_steady=True)
+        s.add(BestEffort(activity_id=a.id, distance_m=5000, elapsed_s=1200, algo_version=1))
+    before = get(client, "/api/stats/fitness")["vo2max"]
+    with Session(engine) as s, s.begin():
+        long = add(
+            s, "2026-09-29T06:00:00+00:00", dist=19000, mov=8100, workout_type="easy", avg_hr=155
+        )
+        metrics(s, long, is_steady=False, pace_cv=0.0876, gps_suspect=False)
+        attach_long_stream(s, long)
+        long_id = long.id
+    after = get(client, "/api/stats/fitness", from_date="2020-01-01", to_date="2020-02-01")[
+        "vo2max"
+    ]
+    assert before["hr_based_n"] == 3 and after["hr_based_n"] == 4
+    assert after["vdot"] == before["vdot"]  # no new PB is required
+    assert after["hr_based"] < before["hr_based"]
+    assert (after["hr_based_date"], after["hr_based_activity_id"]) == ("2026-09-29", long_id)
+    assert after["hr_configured"] is True
+
+
+def test_fitness_hr_window_weights_and_exclusions(engine, client):
+    with Session(engine) as s, s.begin():
+        hr_settings(s)
+        for day, avg in ((TODAY - timedelta(days=27), 150), (TODAY, 160)):
+            a = add(s, f"{day}T06:00:00+00:00", dist=9000, mov=3000, avg_hr=avg)
+            metrics(s, a, is_steady=True)
+        for day, kw, suspect in (
+            (TODAY - timedelta(days=28), {}, False),
+            (TODAY + timedelta(days=1), {}, False),
+            (TODAY, {"excluded_from_stats": True}, False),
+            (TODAY, {"duplicate_of_id": a.id}, False),
+            (TODAY, {"upstream_deleted_at": "2026-09-30"}, False),
+            (TODAY, {"sport_type": "trail_run"}, False),
+            (TODAY, {"is_indoor": True}, False),
+            (TODAY, {"workout_type": "race"}, False),
+            (TODAY, {}, True),
+        ):
+            invalid = add(s, f"{day}T07:00:00+00:00", **kw)
+            metrics(s, invalid, is_steady=True, gps_suspect=suspect)
+    result = get(client, "/api/stats/fitness", include_indoor="true")["vo2max"]
+    old_weight = 2 ** (-27 / 14)
+    expected = (55.5 * old_weight + 50.3) / (old_weight + 1)
+    assert result["hr_based"] == pytest.approx(expected)
+    assert result["hr_based_n"] == 2
+    assert result["hr_based_date"] == str(TODAY)
+
+
+def test_fitness_hr_does_not_fallback_to_summary_for_invalid_stream(engine, client):
+    with Session(engine) as s, s.begin():
+        hr_settings(s)
+        a = add(s, "2026-09-29T06:00:00+00:00")
+        metrics(s, a, is_steady=True)
+        attach_long_stream(s, a, hr=None)
+    result = get(client, "/api/stats/fitness")["vo2max"]
+    assert result["hr_based"] is None and result["hr_based_n"] == 0
+    assert result["hr_based_date"] is None and result["hr_based_activity_id"] is None
+    assert result["hr_configured"] is True
+
+
+@pytest.mark.parametrize("max_hr,rest_hr", [(None, None), (60, 60), (50, 60)])
+def test_fitness_invalid_hr_settings(engine, client, max_hr, rest_hr):
+    with Session(engine) as s, s.begin():
+        s.add_all([Setting(key="hr_max", value=max_hr), Setting(key="hr_rest", value=rest_hr)])
+        a = add(s, "2026-09-29T06:00:00+00:00")
+        metrics(s, a, is_steady=True)
+    result = get(client, "/api/stats/fitness")["vo2max"]
+    assert result["hr_based"] is None and result["hr_configured"] is False
 
 
 def test_fitness_alerts_ramp_and_acwr(engine, client):

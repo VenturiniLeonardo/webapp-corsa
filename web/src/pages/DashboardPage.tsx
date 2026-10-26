@@ -36,7 +36,7 @@ type Effort = { activity_id: number; local_date: string; elapsed_s: number; work
 type RecordRow = { label: string; progression: Effort[] }
 
 type Fitness = {
-  vo2max: { vdot: number | null; vdot_source: string | null; vdot_date: string | null; hr_based: number | null; hr_based_n: number }
+  vo2max: { vdot: number | null; vdot_source: string | null; vdot_date: string | null; hr_based: number | null; hr_based_n: number; hr_based_date: string | null; hr_based_activity_id: number | null; hr_configured: boolean }
   predictions: { label: string; seconds: number }[]
   ctl: number | null
   atl: number | null
@@ -137,7 +137,7 @@ export default function DashboardPage() {
   const zones = useQuery(q<Zones>('/api/stats/zones', { bucket: 'week' }))
   const dist = useQuery(q<Dist>('/api/stats/distribution', { field: 'distance' }))
   const top = useQuery(q<TopWeek[]>('/api/stats/top-weeks', { limit: '10' }))
-  const fitness = useQuery({ queryKey: ['/api/stats/fitness'], queryFn: () => api<Fitness>('/api/stats/fitness') })
+  const fitness = useQuery({ queryKey: ['/api/stats/fitness'], queryFn: () => api<Fitness>('/api/stats/fitness'), staleTime: 0, refetchOnWindowFocus: true, refetchInterval: 60_000 })
   const loadHistory = useQuery(q<LoadHistory>('/api/stats/load-history'))
   const records = useQuery({ queryKey: ['/api/records'], queryFn: () => api<RecordRow[]>('/api/records') })
 
@@ -584,20 +584,28 @@ function FitnessIndices({ data }: { data?: Fitness }) {
   return (
     <section className="flex flex-wrap gap-4">
       <div className="min-w-0 rounded-[14px] px-7 py-6" style={{ flex: '1 1 340px', background: BLUE, color: '#111418' }}>
-        <div className="text-xs font-medium tracking-[.08em] uppercase" style={{ fontFamily: FM }}>VO₂max stimato</div>
-        <div className="mt-2 text-[96px] leading-[.9] font-bold" style={{ fontFamily: FC }}>{f(v.vdot ?? v.hr_based, 1)}<span className="ml-1.5 text-[24px]">ml/kg/min</span></div>
+        <div className="text-xs font-medium tracking-[.08em] uppercase" style={{ fontFamily: FM }}>{v.hr_based != null ? 'VO₂max stimata · da frequenza cardiaca' : 'VDOT da prestazione'}</div>
+        <div className="mt-2 text-[96px] leading-[.9] font-bold tabular-nums" style={{ fontFamily: FC }}>{f(v.hr_based ?? v.vdot, 1)}{v.hr_based != null && <span className="ml-1.5 text-[24px]">ml/kg/min</span>}</div>
         <div className="mt-3 space-y-0.5 text-[13px] font-medium">
-          <div>{v.vdot != null ? `VDOT Daniels · ${v.vdot_source} del ${v.vdot_date}` : 'Nessuna prestazione negli ultimi 180 gg'}</div>
-          <div>{v.hr_based != null ? `Da FC (%FCR): ${it(v.hr_based, 1)} · ${v.hr_based_n} corse costanti, 28 gg` : 'Da FC: imposta FC max e a riposo in Impostazioni'}</div>
+          {v.hr_based != null ? <>
+            <div>{v.hr_based_n} corse con tratti regolari · ultimi 28 gg, più peso alle recenti</div>
+            <div>Ultima corsa inclusa: <Link className="underline" to={`/activities/${v.hr_based_activity_id}`}>{v.hr_based_date}</Link></div>
+            <p className="pt-1 text-xs">Si ricalcola con ogni corsa utilizzabile, inclusi i lunghi. Può salire, scendere o restare uguale dopo l’arrotondamento.</p>
+          </> : <div>{v.hr_configured ? 'Da FC: nessuna corsa con tratti regolari e dati validi negli ultimi 28 gg' : <Link className="underline" to="/settings">Per la stima da FC, imposta FC massima e a riposo</Link>}</div>}
+          <div>{v.vdot != null ? `VDOT Daniels: ${it(v.vdot, 1)} · ${v.vdot_source} del ${v.vdot_date}` : 'Nessuna prestazione negli ultimi 180 gg'}</div>
+          <p className="pt-1 text-xs">Stima da passo e FC, sensibile a caldo, pendenza e sensore. Il VDOT resta un indice da prestazione.</p>
         </div>
         {pr.length > 0 && (
-          <div className="mt-4 grid grid-cols-4 gap-2 border-t border-[#111418]/30 pt-3">
+          <div className="mt-4 border-t border-[#111418]/30 pt-3">
+            <div className="mb-2 text-xs">Proiezioni dal VDOT</div>
+            <div className="grid grid-cols-4 gap-2">
             {pr.map((p) => (
               <div key={p.label}>
                 <div className="text-[11px] tracking-[.06em] uppercase" style={{ fontFamily: FM }}>{({ 'Half Marathon': 'HM', Marathon: 'Mar' } as Record<string, string>)[p.label] ?? p.label}</div>
                 <div className="text-[22px] leading-tight font-semibold" style={{ fontFamily: FC }}>{clock(p.seconds)}</div>
               </div>
             ))}
+            </div>
           </div>
         )}
       </div>

@@ -19,8 +19,10 @@ from sqlalchemy import ColumnElement, func, or_, select
 
 from app.api.activities import PACE, Db, SportType
 from app.domain.models import Activity as A
-from app.domain.models import ActivityMetrics, BestEffort, Setting
+from app.domain.models import ActivityMetrics, BestEffort, Setting, Stream
+from app.domain.stream_codec import decode_stream
 from app.metrics.engine import BEST_EFFORT_TARGETS
+from app.metrics.vo2max import HALF_LIFE_DAYS, hr_estimate, stream_estimate
 
 router = APIRouter(prefix="/api")
 
@@ -546,6 +548,9 @@ class Vo2(BaseModel):
     vdot_date: str | None
     hr_based: float | None  # Swain %HRR method on steady runs, needs hr_max + hr_rest settings
     hr_based_n: int
+    hr_based_date: str | None
+    hr_based_activity_id: int | None
+    hr_configured: bool
 
 
 class Prediction(BaseModel):
@@ -722,8 +727,9 @@ def fitness(s: Db, sc: Sc) -> Fitness:
         .join(A, A.id == BestEffort.activity_id)
         .outerjoin(ActivityMetrics, ActivityMetrics.activity_id == A.id)
         .where(
-            *replace(base, from_date=since).where(),
+            *replace(base, from_date=since, to_date=today).where(),
             ActivityMetrics.gps_suspect.is_not(True),
+            BestEffort.elapsed_s > 0,
             BestEffort.distance_m.in_([d for d in LABELS if d >= 1000]),  # 400m is anaerobic
         )
     ):
@@ -734,29 +740,58 @@ def fitness(s: Db, sc: Sc) -> Fitness:
     hr: dict[str, Any] = dict(
         s.execute(
             select(Setting.key, Setting.value).where(
-                Setting.key.in_(("hr_max", "hr_rest", "cycle_start", "races"))
+                Setting.key.in_(
+                    ("hr_max", "hr_rest", "steady_cv_threshold", "cycle_start", "races")
+                )
             )
         ).all()
     )
-    est: list[float] = []
-    if hr.get("hr_max") and hr.get("hr_rest"):
-        span = hr["hr_max"] - hr["hr_rest"]
-        for d_m, mv, avg in s.execute(
-            select(A.distance_m, A.moving_s, A.avg_hr)
+    est: list[tuple[float, float, str, int]] = []  # value, weight, local date, activity id
+    configured = bool(hr.get("hr_max") and hr.get("hr_rest") and hr["hr_max"] > hr["hr_rest"])
+    if configured:
+        for a, m, stream in s.execute(
+            select(A, ActivityMetrics, Stream)
             .select_from(A)
             .join(ActivityMetrics, ActivityMetrics.activity_id == A.id)
-            .where(
-                *replace(base, from_date=today - timedelta(days=ROLLING_DAYS)).where(),
-                ActivityMetrics.is_steady.is_(True),
-                A.avg_hr.is_not(None),
-                A.moving_s > 0,
-                A.distance_m.is_not(None),
+            .outerjoin(
+                Stream,
+                Stream.source_record_id == func.coalesce(A.stream_source_id, A.primary_source_id),
             )
+            .where(
+                *replace(
+                    base, from_date=today - timedelta(days=ROLLING_DAYS - 1), to_date=today
+                ).where(),
+                A.sport_type == "run",
+                A.is_indoor.is_not(True),
+                A.upstream_deleted_at.is_(None),
+                or_(A.workout_type.is_(None), A.workout_type.not_in(("workout", "race"))),
+                ActivityMetrics.gps_suspect.is_not(True),
+                A.moving_s > 0,
+                A.distance_m > 0,
+            )
+            .order_by(A.local_date, A.start_time_utc, A.id)
         ):
-            frac = (avg - hr["hr_rest"]) / span
-            if 0.3 < frac <= 1:  # outside this the %HRR-%VO2R line is meaningless
-                v = float(d_m or 0) / (float(mv or 1) / 60)
-                est.append(0.2 * v / frac + 3.5)  # ACSM running VO2, Swain
+            value = None
+            if stream is not None:
+                try:
+                    value = stream_estimate(
+                        decode_stream(stream.data),
+                        hr["hr_max"],
+                        hr["hr_rest"],
+                        hr.get("steady_cv_threshold") or 0.08,
+                    )
+                except (ValueError, OSError, EOFError):
+                    pass
+            elif m.is_steady and a.avg_hr is not None and (a.moving_s or 0) >= 1200:
+                value = hr_estimate(
+                    float(a.distance_m or 0) / float(a.moving_s or 1),
+                    a.avg_hr,
+                    hr["hr_max"],
+                    hr["hr_rest"],
+                )
+            if value is not None:
+                age = (today - date.fromisoformat(a.local_date)).days
+                est.append((value, 2 ** (-age / HALF_LIFE_DAYS), a.local_date, a.id))
 
     daily, daily_km = _daily_loads(s, base)  # from the first run, so CTL matches load-history
 
@@ -774,8 +809,13 @@ def fitness(s: Db, sc: Sc) -> Fitness:
             vdot=best[0] if best else None,
             vdot_source=LABELS[best[1]] if best else None,
             vdot_date=best[3] if best else None,
-            hr_based=statistics.median(est) if est else None,
+            hr_based=sum(v * w for v, w, _, _ in est) / sum(w for _, w, _, _ in est)
+            if est
+            else None,
             hr_based_n=len(est),
+            hr_based_date=est[-1][2] if est else None,
+            hr_based_activity_id=est[-1][3] if est else None,
+            hr_configured=configured,
         ),
         predictions=preds,
         **ix,
