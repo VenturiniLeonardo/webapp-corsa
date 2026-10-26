@@ -3,6 +3,7 @@ import { useEffect, useState } from 'react'
 import { api } from '../api/client'
 import { ShoesPanel } from '../components/Shoes'
 import { btn, FB, PageHead, Panel } from '../components/ui'
+import { iso } from '../utils/period'
 
 type Settings = {
   hr_max: number | null
@@ -13,6 +14,7 @@ type Settings = {
   weather_enabled: boolean | null
   cycle_start: string | null
   races: string[] | null
+  vo2max_reference: { value: number; date: string; baseline: number } | null
 }
 
 const field = 'rounded-lg border border-[#262b33] bg-[#111418] px-2.5 py-1 text-sm font-mono tabular-nums text-[#eef1f4]'
@@ -35,6 +37,9 @@ export default function SettingsPage() {
   const [cycleStart, setCycleStart] = useState('')
   const [races, setRaces] = useState<string[]>([])
   const [toast, setToast] = useState('')
+  const [appleVo2, setAppleVo2] = useState('')
+  const [today] = useState(() => iso(new Date()))
+  const [appleDate, setAppleDate] = useState(today)
 
   useEffect(() => {
     const d = q.data
@@ -47,7 +52,9 @@ export default function SettingsPage() {
     setWeather(!!d.weather_enabled)
     setCycleStart(d.cycle_start ?? '')
     setRaces(d.races ?? [])
-  }, [q.data])
+    setAppleVo2(d.vo2max_reference?.value.toString() ?? '')
+    setAppleDate(d.vo2max_reference?.date ?? today)
+  }, [q.data, today])
 
   const z = zones.map(n)
   const filled = z.every((v) => v !== null)
@@ -62,20 +69,23 @@ export default function SettingsPage() {
   const hrErr = max !== null && rest !== null && rest >= max ? 'Resting HR must be below max HR' : ''
   const ref = parsePace(refPace)
   const paceErr = ref == null || ref < 150 || ref > 600 ? 'Reference pace must be m:ss between 2:30 and 10:00' : ''
-  const err = zoneErr || hrErr || paceErr
+  const appleValue = n(appleVo2)
+  const appleErr = appleValue !== null && (!Number.isFinite(appleValue) || appleValue < 14 || appleValue > 65 || !appleDate || appleDate > today) ? 'Inserisci una VO₂max tra 14 e 65 e una data non futura' : ''
+  const err = zoneErr || hrErr || paceErr || appleErr
 
   const save = useMutation({
     mutationFn: () =>
       api<{ recompute_job_id: number | null }>('/api/settings', {
         method: 'PUT',
-        body: JSON.stringify({ hr_max: max, hr_rest: rest, hr_zones: filled ? z : null, steady_cv_threshold: cv, ref_pace_s_per_km: ref, weather_enabled: weather, cycle_start: cycleStart || null, races: [...new Set(races.filter(Boolean))].sort() }),
+        body: JSON.stringify({ hr_max: max, hr_rest: rest, hr_zones: filled ? z : null, steady_cv_threshold: cv, ref_pace_s_per_km: ref, weather_enabled: weather, cycle_start: cycleStart || null, races: [...new Set(races.filter(Boolean))].sort(), vo2max_reference: appleValue === null ? null : { value: appleValue, date: appleDate } }),
       }),
     onSuccess: (r) => {
       setToast(r.recompute_job_id ? 'Saved — recomputation queued' : 'Saved')
       qc.invalidateQueries({ queryKey: ['settings'] })
       qc.invalidateQueries({ queryKey: ['jobs'] })
+      qc.invalidateQueries({ queryKey: ['/api/stats/fitness'] })
     },
-    onError: (e: Error) => setToast(e.message),
+    onError: (e: Error) => setToast('detail' in e && typeof e.detail === 'string' ? e.detail : e.message),
   })
   useEffect(() => {
     if (!toast) return
@@ -127,6 +137,25 @@ export default function SettingsPage() {
         <p className="text-xs text-neutral-500">Z5 is everything above Z4.</p>
         {err && <p className="text-sm text-red-400">{err}</p>}
         </div>
+      </Panel>
+
+      <Panel title="Calibrazione VO₂max · Apple Watch" className="space-y-3 text-sm">
+        <p className="text-neutral-400">Inserisci il valore dell’app Salute e la sua data. La stima viene allineata a quel riferimento e continua ad aggiornarsi con le corse successive.</p>
+        <div className="flex flex-wrap gap-4">
+          <label className="block space-y-1">
+            <span className="block text-neutral-400">VO₂max Apple Watch (ml/kg/min)</span>
+            <input type="number" min={14} max={65} step="0.1" className={`${field} w-28`} placeholder="es. 43,5" value={appleVo2} onChange={(e) => setAppleVo2(e.target.value)} />
+          </label>
+          <label className="block space-y-1">
+            <span className="block text-neutral-400">Data del valore Apple Watch</span>
+            <input type="date" max={today} className={field} value={appleDate} onChange={(e) => setAppleDate(e.target.value)} />
+          </label>
+        </div>
+        <p className="text-xs text-neutral-500">Usa una lettura recente con corse utilizzabili nei 28 giorni fino a quella data. Anche Apple Watch fornisce una stima: l’allineamento non garantisce maggiore accuratezza.</p>
+        {q.data?.vo2max_reference && <p className="text-xs text-neutral-400">Riferimento salvato: {q.data.vo2max_reference.value.toLocaleString('it-IT')} del {q.data.vo2max_reference.date}. Stima di partenza: {q.data.vo2max_reference.baseline.toLocaleString('it-IT', { maximumFractionDigits: 1 })}.</p>}
+        <button type="button" className="text-xs text-[#4c8dff] disabled:opacity-40" disabled={!appleVo2} onClick={() => setAppleVo2('')}>Rimuovi calibrazione</button>
+        <p className="text-xs text-neutral-500">Premi Salva per applicare o rimuovere il riferimento.</p>
+        {appleErr && <p className="text-sm text-red-400">{appleErr}</p>}
       </Panel>
 
       <Panel title="Steady runs" className="text-sm">
@@ -184,7 +213,7 @@ export default function SettingsPage() {
       <div className="flex items-center gap-3">
         <button
           type="submit"
-          disabled={!!err || save.isPending}
+          disabled={!q.data || !!err || save.isPending}
           className={btn}
         >
           Save

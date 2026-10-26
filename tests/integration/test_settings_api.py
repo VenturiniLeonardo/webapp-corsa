@@ -1,3 +1,5 @@
+from datetime import UTC, datetime, timedelta
+
 import pytest
 from fastapi.testclient import TestClient
 from sqlalchemy.orm import Session
@@ -101,3 +103,40 @@ def test_cycle_and_races_roundtrip_and_clear(client):
     assert client.put("/api/settings", json={"cycle_start": "nope"}, headers=H).status_code == 422
     r = client.put("/api/settings", json={"cycle_start": None, "hr_zones": None}, headers=H)
     assert r.json()["settings"]["cycle_start"] is None
+
+
+@pytest.mark.parametrize(
+    "reference",
+    [
+        {"value": 13.9, "date": "2026-09-28"},
+        {"value": 65.1, "date": "2026-09-28"},
+        {"value": 45, "date": "nope"},
+        {"value": 45},
+        {"value": 45, "date": "2026-09-28", "baseline": 50},
+    ],
+)
+def test_invalid_watch_reference_rejected(client, reference):
+    response = client.put("/api/settings", json={"vo2max_reference": reference}, headers=H)
+    assert response.status_code == 422
+    assert client.get("/api/settings").json()["vo2max_reference"] is None
+
+
+def test_future_watch_reference_rejected(client):
+    future = (datetime.now(UTC).date() + timedelta(days=1)).isoformat()
+    response = client.put(
+        "/api/settings", json={"vo2max_reference": {"value": 45, "date": future}}, headers=H
+    )
+    assert response.status_code == 422
+
+
+def test_no_baseline_rejects_calibration_and_leaves_other_settings_unchanged(client):
+    reference = {"value": 45, "date": "2026-09-28"}
+    response = client.put(
+        "/api/settings",
+        json={"hr_max": 190, "hr_rest": 60, "vo2max_reference": reference},
+        headers=H,
+    )
+    assert response.status_code == 422
+    assert "corse utilizzabili" in response.json()["detail"]
+    saved = client.get("/api/settings").json()
+    assert saved["vo2max_reference"] is None and saved["hr_max"] is None

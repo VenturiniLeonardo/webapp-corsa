@@ -566,6 +566,79 @@ def test_fitness_invalid_hr_settings(engine, client, max_hr, rest_hr):
     assert result["hr_based"] is None and result["hr_configured"] is False
 
 
+def test_apple_watch_calibration_preserves_run_changes_and_can_be_removed(engine, client):
+    headers = {"X-Corsa": "1", "Content-Type": "application/json"}
+    with Session(engine) as s, s.begin():
+        hr_settings(s)
+        a = add(s, "2026-09-28T06:00:00+00:00", dist=9000, mov=3000)
+        metrics(s, a, is_steady=True)
+    uncalibrated = get(client, "/api/stats/fitness")
+    assert uncalibrated["vo2max"]["calibrated"] is None
+    reference = {"value": 45.3, "date": "2026-09-28"}
+    response = client.put("/api/settings", json={"vo2max_reference": reference}, headers=headers)
+    assert response.status_code == 200, response.text
+    snapshot = response.json()["settings"]["vo2max_reference"]
+    assert snapshot["baseline"] == pytest.approx(55.5)
+    assert response.json()["recompute_job_id"] is None
+    anchored = get(client, "/api/stats/fitness")
+    assert anchored["vo2max"]["hr_based"] == pytest.approx(55.5)
+    assert anchored["vo2max"]["calibrated"] == pytest.approx(45.3)
+    assert anchored["vo2max"]["calibration"]["status"] == "applied"
+    with Session(engine) as s, s.begin():
+        a = add(s, "2026-09-29T06:00:00+00:00", dist=9600, mov=3000)
+        metrics(s, a, is_steady=True)
+    updated = get(client, "/api/stats/fitness")
+    assert updated["vo2max"]["calibrated"] > anchored["vo2max"]["calibrated"]
+    assert updated["vo2max"]["calibrated"] - anchored["vo2max"]["calibrated"] == pytest.approx(
+        updated["vo2max"]["hr_based"] - anchored["vo2max"]["hr_based"]
+    )
+    assert updated["predictions"] == uncalibrated["predictions"]
+    client.put("/api/settings", json={"vo2max_reference": None}, headers=headers)
+    restored = get(client, "/api/stats/fitness")["vo2max"]
+    assert restored["calibrated"] is None and restored["calibration"] is None
+    assert restored["hr_based"] == updated["vo2max"]["hr_based"]
+
+
+def test_calibration_snapshot_survives_backfill_and_ordinary_save(engine, client):
+    headers = {"X-Corsa": "1", "Content-Type": "application/json"}
+    with Session(engine) as s, s.begin():
+        hr_settings(s)
+        a = add(s, "2026-09-28T06:00:00+00:00", dist=9000, mov=3000)
+        metrics(s, a, is_steady=True)
+    reference = {"value": 45, "date": "2026-09-28"}
+    saved = client.put(
+        "/api/settings", json={"vo2max_reference": reference}, headers=headers
+    ).json()["settings"]["vo2max_reference"]
+    with Session(engine) as s, s.begin():
+        a = add(s, "2026-09-27T06:00:00+00:00", dist=12000, mov=3000)
+        metrics(s, a, is_steady=True)
+    again = client.put("/api/settings", json={"vo2max_reference": reference}, headers=headers)
+    assert again.json()["settings"]["vo2max_reference"] == saved
+    client.put("/api/settings", json={"hr_rest": 55}, headers=headers)
+    suspended = get(client, "/api/stats/fitness")["vo2max"]
+    assert suspended["calibrated"] is None
+    assert suspended["calibration"]["status"] == "settings_changed"
+    client.put("/api/settings", json={"vo2max_reference": reference}, headers=headers)
+    assert get(client, "/api/stats/fitness")["vo2max"]["calibration"]["status"] == "applied"
+
+
+def test_calibration_does_not_show_stale_watch_value_without_recent_runs(engine, client):
+    headers = {"X-Corsa": "1", "Content-Type": "application/json"}
+    with Session(engine) as s, s.begin():
+        hr_settings(s)
+        a = add(s, "2026-08-01T06:00:00+00:00", dist=9000, mov=3000)
+        metrics(s, a, is_steady=True)
+    r = client.put(
+        "/api/settings",
+        json={"vo2max_reference": {"value": 45, "date": "2026-08-01"}},
+        headers=headers,
+    )
+    assert r.status_code == 200, r.text
+    result = get(client, "/api/stats/fitness")["vo2max"]
+    assert result["hr_based"] is None and result["calibrated"] is None
+    assert result["calibration"]["status"] == "no_current_runs"
+
+
 def test_fitness_alerts_ramp_and_acwr(engine, client):
     with Session(engine) as s, s.begin():
         for i in range(21):  # 3 base weeks: 2 km/day

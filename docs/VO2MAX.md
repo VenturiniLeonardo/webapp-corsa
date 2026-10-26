@@ -49,3 +49,32 @@ Caldo, pendenze, deriva cardiaca, FC impostate e qualità del sensore possono
 influenzarla; questo metodo non corregge il dislivello o il meteo.
 
 Riferimento della relazione fra riserve: [Swain et al., 1998](https://pubmed.ncbi.nlm.nih.gov/9502363/).
+
+## Riferimento manuale Apple Watch
+
+In Impostazioni si può salvare una lettura Apple Watch con la sua data,
+oppure rimuoverla. Il valore accettato è 14–65 ml/kg/min, intervallo
+[dichiarato da Apple](https://support.apple.com/en-gb/108790). La data non
+può essere futura; servono FC configurate e corse utilizzabili nella finestra
+di 28 giorni che termina in quella data.
+
+Al salvataggio si conserva uno snapshot della stima non calibrata `B` in
+quella data, della configurazione FC/CV, della versione del modello e del
+numero di corse. Il valore mostrato è `stima_corrente + valore_Apple - B`.
+È un allineamento additivo su un punto scelto dall'utente, non una fusione
+statisticamente validata né una garanzia di accuratezza. Il riferimento
+Apple è anch'esso una stima. Nessun parametro fisiologico è modificato.
+
+Le nuove corse mantengono quindi il loro effetto, senza congelare il numero
+sul valore Apple. La dashboard mostra valore non calibrato, correzione,
+lettura e data. VDOT e proiezioni gara non sono modificati. Il riferimento
+non scade automaticamente: la sua data resta visibile e va aggiornata
+dall'utente quando desidera un nuovo allineamento.
+
+Lo snapshot non cambia per backfill o per un normale salvataggio delle
+impostazioni con lo stesso riferimento. Se cambia FC massima, FC a riposo,
+CV o versione del modello, la calibrazione viene sospesa fino a un nuovo
+salvataggio del riferimento con la configurazione corrente. Senza corse
+attuali non viene mostrata come stima corrente una vecchia lettura Apple.
+La cancellazione ripristina il valore non calibrato. Il riferimento è un
+JSON nelle impostazioni esistenti; non serve una migrazione del database.

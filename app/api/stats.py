@@ -19,10 +19,9 @@ from sqlalchemy import ColumnElement, func, or_, select
 
 from app.api.activities import PACE, Db, SportType
 from app.domain.models import Activity as A
-from app.domain.models import ActivityMetrics, BestEffort, Setting, Stream
-from app.domain.stream_codec import decode_stream
+from app.domain.models import ActivityMetrics, BestEffort, Setting
 from app.metrics.engine import BEST_EFFORT_TARGETS
-from app.metrics.vo2max import HALF_LIFE_DAYS, hr_estimate, stream_estimate
+from app.metrics.vo2max_data import CalibrationStatus, calibration_result, estimate_on
 
 router = APIRouter(prefix="/api")
 
@@ -542,6 +541,14 @@ def top_weeks(s: Db, sc: Sc, limit: Annotated[int, Query(ge=1, le=100)] = 10) ->
     ]
 
 
+class Vo2Calibration(BaseModel):
+    value: float
+    date: str
+    baseline: float
+    offset: float
+    status: CalibrationStatus
+
+
 class Vo2(BaseModel):
     vdot: float | None  # Daniels-Gilbert from the best recent effort
     vdot_source: str | None
@@ -551,6 +558,8 @@ class Vo2(BaseModel):
     hr_based_date: str | None
     hr_based_activity_id: int | None
     hr_configured: bool
+    calibrated: float | None
+    calibration: Vo2Calibration | None
 
 
 class Prediction(BaseModel):
@@ -741,57 +750,21 @@ def fitness(s: Db, sc: Sc) -> Fitness:
         s.execute(
             select(Setting.key, Setting.value).where(
                 Setting.key.in_(
-                    ("hr_max", "hr_rest", "steady_cv_threshold", "cycle_start", "races")
+                    (
+                        "hr_max",
+                        "hr_rest",
+                        "steady_cv_threshold",
+                        "cycle_start",
+                        "races",
+                        "vo2max_reference",
+                    )
                 )
             )
         ).all()
     )
-    est: list[tuple[float, float, str, int]] = []  # value, weight, local date, activity id
-    configured = bool(hr.get("hr_max") and hr.get("hr_rest") and hr["hr_max"] > hr["hr_rest"])
-    if configured:
-        for a, m, stream in s.execute(
-            select(A, ActivityMetrics, Stream)
-            .select_from(A)
-            .join(ActivityMetrics, ActivityMetrics.activity_id == A.id)
-            .outerjoin(
-                Stream,
-                Stream.source_record_id == func.coalesce(A.stream_source_id, A.primary_source_id),
-            )
-            .where(
-                *replace(
-                    base, from_date=today - timedelta(days=ROLLING_DAYS - 1), to_date=today
-                ).where(),
-                A.sport_type == "run",
-                A.is_indoor.is_not(True),
-                A.upstream_deleted_at.is_(None),
-                or_(A.workout_type.is_(None), A.workout_type.not_in(("workout", "race"))),
-                ActivityMetrics.gps_suspect.is_not(True),
-                A.moving_s > 0,
-                A.distance_m > 0,
-            )
-            .order_by(A.local_date, A.start_time_utc, A.id)
-        ):
-            value = None
-            if stream is not None:
-                try:
-                    value = stream_estimate(
-                        decode_stream(stream.data),
-                        hr["hr_max"],
-                        hr["hr_rest"],
-                        hr.get("steady_cv_threshold") or 0.08,
-                    )
-                except (ValueError, OSError, EOFError):
-                    pass
-            elif m.is_steady and a.avg_hr is not None and (a.moving_s or 0) >= 1200:
-                value = hr_estimate(
-                    float(a.distance_m or 0) / float(a.moving_s or 1),
-                    a.avg_hr,
-                    hr["hr_max"],
-                    hr["hr_rest"],
-                )
-            if value is not None:
-                age = (today - date.fromisoformat(a.local_date)).days
-                est.append((value, 2 ** (-age / HALF_LIFE_DAYS), a.local_date, a.id))
+    estimate = estimate_on(s, today, hr, base.where())
+    reference = hr.get("vo2max_reference")
+    calibrated, calibration_status = calibration_result(estimate.value, reference, hr)
 
     daily, daily_km = _daily_loads(s, base)  # from the first run, so CTL matches load-history
 
@@ -809,13 +782,21 @@ def fitness(s: Db, sc: Sc) -> Fitness:
             vdot=best[0] if best else None,
             vdot_source=LABELS[best[1]] if best else None,
             vdot_date=best[3] if best else None,
-            hr_based=sum(v * w for v, w, _, _ in est) / sum(w for _, w, _, _ in est)
-            if est
+            hr_based=estimate.value,
+            hr_based_n=estimate.n,
+            hr_based_date=estimate.last_date,
+            hr_based_activity_id=estimate.activity_id,
+            hr_configured=estimate.configured,
+            calibrated=calibrated if calibration_status == "applied" else None,
+            calibration=Vo2Calibration(
+                value=reference["value"],
+                date=reference["date"],
+                baseline=reference["baseline"],
+                offset=reference["value"] - reference["baseline"],
+                status=calibration_status,
+            )
+            if reference
             else None,
-            hr_based_n=len(est),
-            hr_based_date=est[-1][2] if est else None,
-            hr_based_activity_id=est[-1][3] if est else None,
-            hr_configured=configured,
         ),
         predictions=preds,
         **ix,

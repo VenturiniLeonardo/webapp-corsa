@@ -1,0 +1,43 @@
+import { expect, test } from '@playwright/test'
+
+test('Apple Watch reference can be saved, used by the dashboard and removed on mobile', async ({ page }) => {
+  await page.setViewportSize({ width: 390, height: 844 })
+  const headers = { 'X-Corsa': '1', 'Content-Type': 'application/json' }
+  const setup = await page.request.put('/api/settings', { headers, data: { hr_max: 190, hr_rest: 60, vo2max_reference: null } })
+  expect(setup.ok()).toBe(true)
+  await page.goto('/settings')
+  const input = page.getByLabel('VO₂max Apple Watch (ml/kg/min)')
+  const save = page.locator('form button[type="submit"]').first()
+  await expect(save).toBeEnabled()
+  await input.fill('43.5')
+  const date = await page.getByLabel('Data del valore Apple Watch').inputValue()
+  const saved = page.waitForResponse((r) => r.url().endsWith('/api/settings') && r.request().method() === 'PUT')
+  await save.click()
+  const response = await saved
+  expect(response.ok()).toBe(true)
+  const reference = (await response.json()).settings.vo2max_reference
+  expect(reference.value).toBe(43.5)
+  expect(reference.date).toBe(date)
+  expect(reference.baseline).toBeGreaterThan(0)
+  await expect(page.getByText(/Riferimento salvato: 43,5/)).toBeVisible()
+  await page.reload()
+  await expect(input).toHaveValue('43.5')
+  await page.goto('/')
+  await expect(page.getByRole('heading', { name: 'La tua stagione' })).toBeVisible()
+  const details = page.getByRole('button', { name: /Analisi approfondite/ })
+  if (await details.count()) await details.click()
+  const card = page.getByText('VO₂max stimata · da frequenza cardiaca', { exact: true }).locator('..')
+  await expect(card.locator(':scope > div').nth(1)).toContainText('43,5')
+  await expect(card).toContainText('Calibrata su Apple Watch: 43,5')
+  await expect(card).toContainText('Prima della calibrazione:')
+  await page.goto('/settings')
+  await expect(input).toHaveValue('43.5')
+  await page.getByRole('button', { name: 'Rimuovi calibrazione', exact: true }).click()
+  const removed = page.waitForResponse((r) => r.url().endsWith('/api/settings') && r.request().method() === 'PUT')
+  await save.click()
+  expect((await (await removed).json()).settings.vo2max_reference).toBeNull()
+  const fitness = await page.request.get('/api/stats/fitness')
+  const vo2max = (await fitness.json()).vo2max
+  expect(vo2max.calibrated).toBeNull()
+  expect(vo2max.calibration).toBeNull()
+})
